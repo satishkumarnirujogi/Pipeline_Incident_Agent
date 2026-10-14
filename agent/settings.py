@@ -10,6 +10,7 @@ class Settings(BaseSettings):
 
     postgres_host: str = "localhost"
     postgres_port: int = 5432
+    postgres_host_port: int = 5433
     agent_app_password: str = ""
     agent_ro_password: str = ""
     agent_rw_password: str = ""
@@ -22,6 +23,7 @@ class Settings(BaseSettings):
     airflow_password: str = ""
 
     weather_proxy_url: str = "http://localhost:8091"
+    weather_proxy_host_port: int = 8091
     weather_proxy_control_token: str = ""
 
     openrouter_api_key: str = ""
@@ -38,15 +40,20 @@ class Settings(BaseSettings):
     chaos_mode: str = "off"
     env: str = "dev"
 
-    def dsn(self, role: str, database: str) -> str:
+    def dsn(self, role: str, database: str, from_host: bool = False) -> str:
+        """from_host=True: operator scripts on the laptop reach Postgres on the published port."""
         password = {
             "agent_app": self.agent_app_password,
             "agent_ro": self.agent_ro_password,
             "agent_rw": self.agent_rw_password,
+            "pipeline": self.pipeline_db_password,
         }[role]
-        return (
-            f"postgresql://{role}:{password}@{self.postgres_host}:{self.postgres_port}/{database}"
+        host, port = (
+            ("localhost", self.postgres_host_port)
+            if from_host
+            else (self.postgres_host, self.postgres_port)
         )
+        return f"postgresql://{role}:{password}@{host}:{port}/{database}"
 
     @property
     def agent_dsn(self) -> str:

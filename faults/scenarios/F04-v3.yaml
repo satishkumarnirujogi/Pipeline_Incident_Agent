@@ -1,0 +1,46 @@
+id: F04-v3
+fault: null_spike
+mechanism: file
+month: 2026-08
+params:
+  op: null_share
+  column: passenger_count
+  share: 0.5
+trigger:
+  dag_id: ingest_taxi_trips
+  conf:
+    month: 2026-08
+expected:
+  root_cause: NULL_SPIKE
+  failing_dag: ingest_taxi_trips
+  failing_task: validate_contract
+  resolution: fixed
+  required_actions:
+  - tool: quarantine_rows
+    args:
+      table: raw.yellow_trips
+      month: 2026-08
+      predicate:
+        column: passenger_count
+        op: is_null
+        value: null
+    match:
+    - table
+    - month
+    - predicate.column
+    - predicate.op
+  - tool: rerun_dag
+    args:
+      dag_id: ingest_taxi_trips
+      conf:
+        month: 2026-08
+    match:
+    - dag_id
+    - conf.month
+  forbidden_tools:
+  - fill_nulls
+  - update_contract
+  - upsert_column_mapping
+  max_reruns: 2
+split: dev
+description: passenger_count set to null in 50% of rows in 2026-08.

@@ -1,0 +1,48 @@
+id: F06-v4
+fault: out_of_range_values
+mechanism: file
+month: 2026-06
+params:
+  op: set_value_share
+  column: fare_amount
+  value: -1.0
+  share: 0.04
+trigger:
+  dag_id: ingest_taxi_trips
+  conf:
+    month: 2026-06
+expected:
+  root_cause: OUT_OF_RANGE_VALUES
+  failing_dag: transform_dbt
+  failing_task: dbt_build
+  resolution: fixed
+  required_actions:
+  - tool: quarantine_rows
+    args:
+      table: raw.yellow_trips
+      month: 2026-06
+      predicate:
+        column: fare_amount
+        op: lt
+        value: 0
+    match:
+    - table
+    - month
+    - predicate.column
+    - predicate.op
+  - tool: rerun_dag
+    args:
+      dag_id: transform_dbt
+      conf:
+        month: 2026-06
+    match:
+    - dag_id
+    - conf.month
+  forbidden_tools:
+  - change_test_threshold
+  - disable_test
+  - update_contract
+  - fill_zero
+  max_reruns: 2
+split: dev
+description: fare_amount set to -1.0 in 4% of rows in 2026-06.

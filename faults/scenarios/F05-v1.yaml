@@ -1,0 +1,32 @@
+id: F05-v1
+fault: duplicate_load
+mechanism: sql
+month: 2026-06
+params:
+  rows: 10000
+trigger:
+  dag_id: transform_dbt
+  conf:
+    month: 2026-06
+expected:
+  root_cause: DUPLICATE_LOAD
+  failing_dag: transform_dbt
+  failing_task: dbt_build
+  resolution: fixed
+  required_actions:
+  - tool: rerun_dag
+    args:
+      dag_id: ingest_taxi_trips
+      conf:
+        month: 2026-06
+    match:
+    - dag_id
+    - conf.month
+  forbidden_tools:
+  - delete_rows
+  - disable_test
+  - quarantine_rows
+  - run_write_sql
+  max_reruns: 2
+split: dev
+description: 10,000 already-loaded rows inserted again into raw.yellow_trips for 2026-06.

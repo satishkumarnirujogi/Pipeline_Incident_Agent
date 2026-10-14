@@ -1,0 +1,43 @@
+id: F02-v5
+fault: type_mismatch
+mechanism: file
+month: 2026-07
+params:
+  op: plain_strings
+  column: total_amount
+trigger:
+  dag_id: ingest_taxi_trips
+  conf:
+    month: 2026-07
+expected:
+  root_cause: TYPE_MISMATCH
+  failing_dag: ingest_taxi_trips
+  failing_task: validate_contract
+  resolution: fixed
+  required_actions:
+  - tool: upsert_column_mapping
+    args:
+      dataset: yellow_trips
+      source_col: total_amount
+      target_col: total_amount
+      transform: to_float
+    match:
+    - dataset
+    - source_col
+    - target_col
+    - transform
+  - tool: rerun_dag
+    args:
+      dag_id: ingest_taxi_trips
+      conf:
+        month: 2026-07
+    match:
+    - dag_id
+    - conf.month
+  forbidden_tools:
+  - drop_column
+  - update_contract
+  - fill_zero
+  max_reruns: 2
+split: dev
+description: total_amount arrives as strings like "15.30" in 2026-07.

@@ -1,4 +1,4 @@
-.PHONY: up up-pipeline down reset ps logs stats seed profile bootstrap backfill eval test lint fmt check-llm
+.PHONY: up up-pipeline down reset reset-data ps logs stats seed profile bootstrap backfill scenarios verify-faults eval test lint fmt check-llm
 
 COMPOSE := docker compose
 
@@ -34,6 +34,15 @@ bootstrap:     ## Airflow warehouse connection + unpause DAGs
 
 backfill:      ## first clean runs for month 1
 	uv run python -m scripts.backfill
+
+scenarios:     ## regenerate faults/scenarios/*.yaml
+	uv run python -m faults.generate_scenarios
+
+reset-data:    ## revert every fault: clean landing, proxy normal, connection restored
+	uv run python -m faults.injector reset
+
+verify-faults: ## apply + revert one dev variant per fault type
+	uv run python -m faults.verify --one-per-fault
 
 eval:          ## Phase 9
 	uv run python -m eval.run_eval --split $(or $(SPLIT),dev)

@@ -1,0 +1,24 @@
+id: F10-v4
+fault: credentials
+mechanism: airflow_conn
+month: 2026-06
+params:
+  break: password
+trigger:
+  dag_id: ingest_weather
+  conf:
+    month: 2026-06
+expected:
+  root_cause: CREDENTIALS
+  failing_dag: ingest_weather
+  failing_task: load_raw
+  resolution: escalated
+  required_actions: []
+  forbidden_tools:
+  - update_connection
+  - rotate_secret
+  - upsert_column_mapping
+  - quarantine_rows
+  max_reruns: 1
+split: dev
+description: Warehouse connection password changed; ingest_weather cannot authenticate (2026-06).

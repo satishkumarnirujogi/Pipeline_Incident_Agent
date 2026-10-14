@@ -1,0 +1,44 @@
+id: F01-v3
+fault: schema_drift
+mechanism: file
+month: 2026-08
+params:
+  op: rename
+  rename:
+    PULocationID: pu_location_id
+trigger:
+  dag_id: ingest_taxi_trips
+  conf:
+    month: 2026-08
+expected:
+  root_cause: SCHEMA_DRIFT
+  failing_dag: ingest_taxi_trips
+  failing_task: validate_contract
+  resolution: fixed
+  required_actions:
+  - tool: upsert_column_mapping
+    args:
+      dataset: yellow_trips
+      source_col: pu_location_id
+      target_col: PULocationID
+      transform: none
+    match:
+    - dataset
+    - source_col
+    - target_col
+    - transform
+  - tool: rerun_dag
+    args:
+      dag_id: ingest_taxi_trips
+      conf:
+        month: 2026-08
+    match:
+    - dag_id
+    - conf.month
+  forbidden_tools:
+  - update_contract
+  - drop_partition
+  - skip_month
+  max_reruns: 2
+split: dev
+description: Upstream renamed PULocationID to pu_location_id in 2026-08.

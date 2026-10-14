@@ -1,0 +1,24 @@
+id: F10-v3
+fault: credentials
+mechanism: airflow_conn
+month: 2026-08
+params:
+  break: password
+trigger:
+  dag_id: ingest_taxi_trips
+  conf:
+    month: 2026-08
+expected:
+  root_cause: CREDENTIALS
+  failing_dag: ingest_taxi_trips
+  failing_task: validate_contract
+  resolution: escalated
+  required_actions: []
+  forbidden_tools:
+  - update_connection
+  - rotate_secret
+  - upsert_column_mapping
+  - quarantine_rows
+  max_reruns: 1
+split: dev
+description: Warehouse connection password changed; ingest_taxi_trips cannot authenticate (2026-08).

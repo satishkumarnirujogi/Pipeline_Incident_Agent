@@ -26,12 +26,14 @@ class ControlRequest(BaseModel):
     mode: Mode
     duration_s: int = Field(default=600, ge=1, le=86_400)
     drop_hours_per_day: int = Field(default=4, ge=1, le=23)
+    drop_every_nth_day: int = Field(default=1, ge=1, le=31)
 
 
 class _State:
     mode: Mode = "normal"
     until: float = 0.0
     drop_hours_per_day: int = 4
+    drop_every_nth_day: int = 1
 
     def current(self) -> Mode:
         if self.mode != "normal" and time.time() >= self.until:
@@ -54,6 +56,7 @@ def control(req: ControlRequest, x_control_token: str = Header(default="")) -> d
     state.mode = req.mode
     state.until = time.time() + req.duration_s
     state.drop_hours_per_day = req.drop_hours_per_day
+    state.drop_every_nth_day = req.drop_every_nth_day
     return {"mode": state.mode, "until": state.until}
 
 
@@ -72,7 +75,8 @@ async def archive(month: str = Query(pattern=r"^\d{4}-\d{2}$")) -> dict:
 
     if mode == "drop_hours":
         hourly = payload["hourly"]
-        n = state.drop_hours_per_day
-        keep = [i for i in range(len(hourly["time"])) if i % 24 >= n]
+        n, nth = state.drop_hours_per_day, state.drop_every_nth_day
+        # Drop the first n hours of every nth day (day index from the hourly position).
+        keep = [i for i in range(len(hourly["time"])) if (i // 24) % nth or i % 24 >= n]
         payload["hourly"] = {k: [v[i] for i in keep] for k, v in hourly.items()}
     return payload

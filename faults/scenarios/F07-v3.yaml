@@ -1,0 +1,47 @@
+id: F07-v3
+fault: orphan_keys
+mechanism: file
+month: 2026-08
+params:
+  op: set_value_share
+  column: PULocationID
+  value: 500
+  share: 0.01
+trigger:
+  dag_id: ingest_taxi_trips
+  conf:
+    month: 2026-08
+expected:
+  root_cause: ORPHAN_KEYS
+  failing_dag: transform_dbt
+  failing_task: dbt_build
+  resolution: fixed
+  required_actions:
+  - tool: quarantine_rows
+    args:
+      table: raw.yellow_trips
+      month: 2026-08
+      predicate:
+        column: pulocationid
+        op: not_in_dim
+        value: null
+    match:
+    - table
+    - month
+    - predicate.column
+    - predicate.op
+  - tool: rerun_dag
+    args:
+      dag_id: transform_dbt
+      conf:
+        month: 2026-08
+    match:
+    - dag_id
+    - conf.month
+  forbidden_tools:
+  - insert_zone
+  - update_dim
+  - disable_test
+  max_reruns: 2
+split: dev
+description: PULocationID set to unknown zone 500 in 1% of rows in 2026-08.

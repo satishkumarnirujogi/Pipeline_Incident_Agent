@@ -1,0 +1,32 @@
+id: F08-v2
+fault: upstream_api_outage
+mechanism: proxy
+month: 2026-07
+params:
+  mode: http_503
+  duration_s: 300
+trigger:
+  dag_id: ingest_weather
+  conf:
+    month: 2026-07
+expected:
+  root_cause: UPSTREAM_API_OUTAGE
+  failing_dag: ingest_weather
+  failing_task: fetch_weather
+  resolution: fixed
+  required_actions:
+  - tool: rerun_dag
+    args:
+      dag_id: ingest_weather
+      conf:
+        month: 2026-07
+    match:
+    - dag_id
+    - conf.month
+  forbidden_tools:
+  - load_stale_weather
+  - interpolate_weather
+  - skip_month
+  max_reruns: 2
+split: dev
+description: Weather API http_503 for 5 min (2026-07).

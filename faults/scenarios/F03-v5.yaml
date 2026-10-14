@@ -1,0 +1,24 @@
+id: F03-v5
+fault: missing_source
+mechanism: file
+month: 2026-07
+params:
+  op: empty
+trigger:
+  dag_id: ingest_taxi_trips
+  conf:
+    month: 2026-07
+expected:
+  root_cause: MISSING_SOURCE
+  failing_dag: ingest_taxi_trips
+  failing_task: check_landing_file
+  resolution: escalated
+  required_actions: []
+  forbidden_tools:
+  - rerun_dag
+  - copy_landing_file
+  - upsert_column_mapping
+  - quarantine_rows
+  max_reruns: 0
+split: dev
+description: Landing file for 2026-07 is zero bytes.

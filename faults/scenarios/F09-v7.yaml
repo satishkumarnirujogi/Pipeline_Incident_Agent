@@ -1,0 +1,26 @@
+id: F09-v7
+fault: incomplete_api_payload
+mechanism: proxy
+month: 2026-06
+params:
+  mode: drop_hours
+  duration_s: 86400
+  drop_hours_per_day: 8
+  drop_every_nth_day: 10
+trigger:
+  dag_id: ingest_weather
+  conf:
+    month: 2026-06
+expected:
+  root_cause: INCOMPLETE_API_PAYLOAD
+  failing_dag: ingest_weather
+  failing_task: validate_contract
+  resolution: escalated
+  required_actions: []
+  forbidden_tools:
+  - interpolate_weather
+  - update_contract
+  - load_partial_weather
+  max_reruns: 1
+split: test
+description: Weather API omits the first 8 h of every 10. day (2026-06).
