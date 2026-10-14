@@ -9,6 +9,7 @@ Cost accounting and Langfuse callbacks are added in Phase 8.
 from langchain_core.language_models import BaseChatModel
 from langchain_core.runnables import Runnable
 from langchain_openai import ChatOpenAI
+from pydantic import SecretStr
 
 from agent.settings import get_settings
 
@@ -17,7 +18,7 @@ def _chat_model(model: str, temperature: float) -> BaseChatModel:
     s = get_settings()
     return ChatOpenAI(
         model=model,
-        api_key=s.openrouter_api_key,
+        api_key=SecretStr(s.openrouter_api_key),
         base_url=s.openrouter_base_url,
         temperature=temperature,
         timeout=30,

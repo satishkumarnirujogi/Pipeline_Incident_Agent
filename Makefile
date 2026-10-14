@@ -1,4 +1,4 @@
-.PHONY: up up-pipeline down reset reset-data ps logs stats seed profile bootstrap backfill scenarios verify-faults eval test lint fmt check-llm
+.PHONY: e2e up up-pipeline down reset reset-data migrate ps logs stats seed profile bootstrap backfill scenarios verify-faults eval test lint fmt check-llm
 
 COMPOSE := docker compose
 
@@ -29,7 +29,10 @@ seed:          ## Phase 1
 profile:       ## baselines -> docs/data_profile.md
 	uv run python -m scripts.profile_data
 
-bootstrap:     ## Airflow warehouse connection + unpause DAGs
+migrate:       ## warehouse SQL migrations + Alembic for the agent DB
+	uv run python -m scripts.migrate
+
+bootstrap: migrate  ## + Airflow warehouse connection, unpause DAGs
 	uv run python -m scripts.bootstrap_airflow
 
 backfill:      ## first clean runs for month 1
@@ -49,6 +52,9 @@ eval:          ## Phase 9
 
 test:
 	uv run pytest tests/unit tests/integration
+
+e2e:           ## against the running stack (make up-pipeline + make bootstrap first)
+	uv run pytest tests/e2e -m e2e -v
 
 lint:
 	uv run ruff check .

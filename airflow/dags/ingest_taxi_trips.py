@@ -13,7 +13,13 @@ import pyarrow.parquet as pq
 from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.sdk import Param, dag, get_current_context, task
 from common.callbacks import notify_incident
-from common.contract import get_mappings, load_contract, validate_trips
+from common.contract import (
+    get_mappings,
+    get_quarantine_rules,
+    get_zone_ids,
+    load_contract,
+    validate_trips,
+)
 from common.db import CONTRACTS_DIR, DATA_DIR, warehouse_connect
 from common.loaders import replace_partition
 
@@ -27,6 +33,10 @@ def _landing_path(month: str) -> Path:
 
 def _validated_path(month: str) -> Path:
     return DATA_DIR / "staging" / "trips" / f"yellow_tripdata_{month}.parquet"
+
+
+def _quarantine_dir(month: str) -> Path:
+    return DATA_DIR / "staging" / "quarantine" / month
 
 
 @dag(
@@ -59,9 +69,21 @@ def ingest_taxi_trips():
         contract = load_contract(CONTRACTS_DIR / f"{DATASET}.yaml")
         with warehouse_connect() as conn:
             mappings = get_mappings(conn, DATASET)
+            rules = get_quarantine_rules(conn, DATASET, month)
+            zone_ids = get_zone_ids(conn) if any(r.op == "not_in_dim" for r in rules) else None
         out = _validated_path(month)
-        result = validate_trips(Path(landing), contract, mappings, month, out)
-        return {"path": str(out), "rows": result.rows, "warnings": result.warnings}
+        qdir = _quarantine_dir(month)
+        for stale in qdir.glob("*.parquet"):
+            stale.unlink()
+        result = validate_trips(
+            Path(landing), contract, mappings, month, out, rules, zone_ids, qdir
+        )
+        return {
+            "path": str(out),
+            "rows": result.rows,
+            "warnings": result.warnings,
+            "quarantine": {b: str(qdir / f"{b}.parquet") for b in result.quarantined},
+        }
 
     @task
     def load_raw(validated: dict) -> dict:
@@ -72,11 +94,20 @@ def ingest_taxi_trips():
             rows = replace_partition(
                 conn,
                 "raw.yellow_trips",
-                "pickup_month",
-                month,
+                {"pickup_month": month},
                 pf.iter_batches(batch_size=BATCH_SIZE),
                 run_id=ctx["run_id"],
             )
+            # Rows diverted by an active quarantine rule; replaced per batch, so reruns
+            # do not duplicate them either.
+            for batch_id, qpath in validated.get("quarantine", {}).items():
+                replace_partition(
+                    conn,
+                    "quarantine.yellow_trips",
+                    {"pickup_month": month, "batch_id": batch_id},
+                    pq.ParquetFile(qpath).iter_batches(batch_size=BATCH_SIZE),
+                    run_id=ctx["run_id"],
+                )
         return {"path": validated["path"], "rows": rows}
 
     @task

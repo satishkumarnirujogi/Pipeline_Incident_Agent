@@ -62,3 +62,5 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 # airflow/plugins is on Airflow's sys.path; mirror that so tests import common.*
 pythonpath = [".", "airflow/plugins"]
+markers = ["e2e: needs the running docker compose stack (make e2e)"]
+addopts = "-m \"not e2e\""

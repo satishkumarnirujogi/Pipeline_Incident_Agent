@@ -68,7 +68,7 @@ def ingest_weather():
         batch = pa.RecordBatch.from_pandas(df, preserve_index=False)
         with warehouse_connect() as conn:
             return replace_partition(
-                conn, "raw.weather_hourly", "month", month, [batch], run_id=ctx["run_id"]
+                conn, "raw.weather_hourly", {"month": month}, [batch], run_id=ctx["run_id"]
             )
 
     load_raw(validate_contract(fetch_weather()))

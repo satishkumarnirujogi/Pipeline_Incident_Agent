@@ -128,6 +128,13 @@ services:
   worker:
     <<: *app
     command: celery -A worker.celery_app:celery_app worker --concurrency=1 --pool=solo --loglevel=INFO
+    environment:
+      FASTEMBED_CACHE_PATH: /opt/models
+    volumes:
+      # tier-0 tools read landing files and contracts; agents never write files
+      - ./data:/app/data:ro
+      - ./contracts:/app/contracts:ro
+      - models:/opt/models
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
@@ -154,3 +161,4 @@ services:
 
 volumes:
   pgdata:
+  models:  # fastembed model cache, survives container restarts

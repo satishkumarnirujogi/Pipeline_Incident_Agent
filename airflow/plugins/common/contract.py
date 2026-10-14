@@ -38,6 +38,8 @@ class ContractViolation(Exception):
 class ContractResult:
     dataset: str
     rows: int
+    kept_rows: int = 0
+    quarantined: dict[str, int] = field(default_factory=dict)  # batch_id -> rows
     warnings: list[str] = field(default_factory=list)
     null_counts: dict[str, int] = field(default_factory=dict)
 
@@ -144,14 +146,71 @@ def _month_bounds(month: str) -> tuple[datetime, datetime]:
 # --------------------------------------------------------------------- trips
 
 
+@dataclass(frozen=True)
+class QuarantineRule:
+    """An active row in ops.quarantine_rules: rows matching it never reach raw."""
+
+    batch_id: str
+    column: str  # raw (lowercase) column name
+    op: str  # is_null | lt | gt | not_in_dim
+    value: float | None = None
+
+
+def get_quarantine_rules(conn: Any, dataset: str, month: str) -> list[QuarantineRule]:
+    rows = conn.execute(
+        "SELECT batch_id::text, column_name, op, value FROM ops.quarantine_rules "
+        "WHERE dataset = %s AND month = %s AND active ORDER BY id",
+        (dataset, month),
+    ).fetchall()
+    return [QuarantineRule(*r) for r in rows]
+
+
+def get_zone_ids(conn: Any) -> pa.Array:
+    rows = conn.execute("SELECT location_id FROM marts.dim_zones").fetchall()
+    return pa.array([r[0] for r in rows], pa.int64())
+
+
+def rule_mask(
+    batch: pa.RecordBatch, rule: QuarantineRule, zone_ids: pa.Array | None
+) -> pa.BooleanArray:
+    """True where the row matches the rule. Columns are matched case-insensitively,
+    because rules use raw column names (pulocationid) and files use source names."""
+    by_lower = {n.lower(): n for n in batch.schema.names}
+    if rule.column not in by_lower:
+        raise ContractViolation(f"quarantine rule {rule.batch_id}: no column {rule.column!r}")
+    col = batch.column(by_lower[rule.column])
+    if rule.op == "is_null":
+        return pc.is_null(col)
+    if rule.op == "lt":
+        mask = pc.less(col, pa.scalar(rule.value).cast(col.type))
+    elif rule.op == "gt":
+        mask = pc.greater(col, pa.scalar(rule.value).cast(col.type))
+    elif rule.op == "not_in_dim":
+        if zone_ids is None:
+            raise ContractViolation("quarantine rule not_in_dim needs the zone dimension")
+        mask = pc.invert(pc.is_in(pc.cast(col, pa.int64()), value_set=zone_ids))
+    else:
+        raise ContractViolation(f"unknown quarantine op {rule.op!r}")
+    return pc.fill_null(mask, False)
+
+
 def validate_trips(
     path: Path,
     contract: dict,
     mappings: list[ColumnMapping],
     month: str,
     out_path: Path,
+    rules: list[QuarantineRule] | None = None,
+    zone_ids: pa.Array | None = None,
+    quarantine_dir: Path | None = None,
 ) -> ContractResult:
-    """Validate a trips Parquet file and write the mapped, validated copy to out_path."""
+    """Validate a trips Parquet file and write the mapped, validated copy to out_path.
+
+    Rows matching an active quarantine rule are written to quarantine_dir/<batch_id>.parquet
+    instead and excluded from the rate checks. min_rows counts input rows, so quarantining
+    a large share does not by itself fail the contract.
+    """
+    rules = rules or []
     pf = pq.ParquetFile(path)
     result = ContractResult(dataset=contract["dataset"], rows=0)
     columns: dict[str, dict] = contract["columns"]
@@ -163,10 +222,13 @@ def validate_trips(
     outside_month = 0
     outside_row_ids: list[int] = []
     offset = 0
+    kept = 0
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = out_path.with_suffix(".parquet.part")
     writer: pq.ParquetWriter | None = None
+    q_writers: dict[str, pq.ParquetWriter] = {}
+    q_tmp: dict[str, Path] = {}
     try:
         for raw_batch in pf.iter_batches(batch_size=BATCH_SIZE):
             batch = apply_mappings(raw_batch, mappings)
@@ -174,19 +236,42 @@ def validate_trips(
                 _check_schema(batch.schema, contract, result.warnings)
                 writer = pq.ParquetWriter(tmp, batch.schema)
 
+            # Assign each row to the first rule it matches; others stay in the pipeline.
+            quarantined = pa.array([False] * batch.num_rows)
+            for rule in rules:
+                mask = pc.and_(rule_mask(batch, rule, zone_ids), pc.invert(quarantined))
+                if pc.any(mask).as_py():
+                    if rule.batch_id not in q_writers:
+                        assert quarantine_dir is not None, "quarantine_dir required with rules"
+                        quarantine_dir.mkdir(parents=True, exist_ok=True)
+                        q_tmp[rule.batch_id] = quarantine_dir / f"{rule.batch_id}.parquet.part"
+                        q_writers[rule.batch_id] = pq.ParquetWriter(
+                            q_tmp[rule.batch_id], batch.schema
+                        )
+                    q_writers[rule.batch_id].write_batch(batch.filter(mask))
+                    n = pc.sum(mask).as_py()
+                    result.quarantined[rule.batch_id] = result.quarantined.get(rule.batch_id, 0) + n
+                    quarantined = pc.or_(quarantined, mask)
+            keep = pc.invert(quarantined)
+
             for name in columns:
                 col = batch.column(name)
                 if col.null_count:
-                    nulls[name] += col.null_count
-                    if len(null_row_ids[name]) < MAX_LOGGED_ROW_IDS:
-                        idx = pc.indices_nonzero(pc.is_null(col)).to_pylist()
+                    null_mask = pc.and_(pc.is_null(col), keep)
+                    n_null = pc.sum(null_mask).as_py() or 0
+                    nulls[name] += n_null
+                    if n_null and len(null_row_ids[name]) < MAX_LOGGED_ROW_IDS:
+                        idx = pc.indices_nonzero(null_mask).to_pylist()
                         null_row_ids[name] += [offset + i for i in idx[:MAX_LOGGED_ROW_IDS]]
 
             if "max_pickup_outside_month_rate" in checks:
                 pickup = batch.column("tpep_pickup_datetime")
-                mask = pc.or_(
-                    pc.less(pickup, pa.scalar(start, pickup.type)),
-                    pc.greater_equal(pickup, pa.scalar(end, pickup.type)),
+                mask = pc.and_(
+                    pc.or_(
+                        pc.less(pickup, pa.scalar(start, pickup.type)),
+                        pc.greater_equal(pickup, pa.scalar(end, pickup.type)),
+                    ),
+                    keep,
                 )
                 n_out = pc.sum(mask).as_py() or 0
                 if n_out:
@@ -195,16 +280,22 @@ def validate_trips(
                         idx = pc.indices_nonzero(mask).to_pylist()
                         outside_row_ids += [offset + i for i in idx[:MAX_LOGGED_ROW_IDS]]
 
-            writer.write_batch(batch)
+            kept_batch = batch.filter(keep) if rules else batch
+            writer.write_batch(kept_batch)
+            kept += kept_batch.num_rows
             offset += batch.num_rows
     finally:
         if writer is not None:
             writer.close()
+        for w in q_writers.values():
+            w.close()
 
     rows = offset
     result.rows = rows
+    result.kept_rows = kept
     result.null_counts = nulls
     errors: list[str] = []
+    checked = max(kept, 1)  # rate checks cover the rows that stay in the pipeline
 
     min_rows = checks.get("min_rows")
     if min_rows is not None and rows < min_rows:
@@ -219,18 +310,18 @@ def validate_trips(
                 f"column {name!r} is not nullable but has {n:,} nulls; "
                 f"first row ids {null_row_ids[name][:MAX_LOGGED_ROW_IDS]}"
             )
-        elif "max_null_rate" in spec and n / max(rows, 1) > spec["max_null_rate"]:
+        elif "max_null_rate" in spec and n / checked > spec["max_null_rate"]:
             errors.append(
-                f"column {name!r} null rate {n / rows:.4f} exceeds max "
-                f"{spec['max_null_rate']} ({n:,} of {rows:,} rows); "
+                f"column {name!r} null rate {n / checked:.4f} exceeds max "
+                f"{spec['max_null_rate']} ({n:,} of {kept:,} rows); "
                 f"first row ids {null_row_ids[name][:MAX_LOGGED_ROW_IDS]}"
             )
 
     max_out = checks.get("max_pickup_outside_month_rate")
-    if max_out is not None and outside_month / max(rows, 1) > max_out:
+    if max_out is not None and outside_month / checked > max_out:
         errors.append(
-            f"{outside_month:,} of {rows:,} pickups fall outside {month} "
-            f"(rate {outside_month / rows:.4f}, max {max_out}); "
+            f"{outside_month:,} of {kept:,} pickups fall outside {month} "
+            f"(rate {outside_month / checked:.4f}, max {max_out}); "
             f"first row ids {outside_row_ids[:MAX_LOGGED_ROW_IDS]}"
         )
 
@@ -238,10 +329,22 @@ def validate_trips(
         log.warning(w)
     if errors:
         tmp.unlink(missing_ok=True)
+        for p in q_tmp.values():
+            p.unlink(missing_ok=True)
         raise ContractViolation(f"{contract['dataset']} {month}: " + "; ".join(errors))
 
     tmp.replace(out_path)
-    log.info("%s %s: %s rows passed the contract", contract["dataset"], month, f"{rows:,}")
+    for p in q_tmp.values():
+        p.replace(p.with_suffix(""))  # <batch_id>.parquet.part -> <batch_id>.parquet
+    for batch_id, n in result.quarantined.items():
+        log.info(
+            "%s %s: %s rows quarantined under batch %s",
+            contract["dataset"],
+            month,
+            f"{n:,}",
+            batch_id,
+        )
+    log.info("%s %s: %s rows passed the contract", contract["dataset"], month, f"{kept:,}")
     return result
 
 

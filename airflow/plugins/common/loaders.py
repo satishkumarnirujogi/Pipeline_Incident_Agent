@@ -32,12 +32,13 @@ def _table_columns(conn: Any, table: str) -> list[str]:
 
 
 def _to_copy_batch(
-    batch: pa.RecordBatch, columns: list[str], partition_col: str, value: str, run_id: str | None
+    batch: pa.RecordBatch, columns: list[str], partition: dict[str, str], run_id: str | None
 ) -> pa.RecordBatch:
     """Lowercase names, drop columns the table lacks, add partition and run id, order by table."""
     by_name = {n.lower(): a for n, a in zip(batch.schema.names, batch.columns, strict=True)}
     n = batch.num_rows
-    by_name[partition_col] = pa.array([value] * n, pa.string())
+    for col, value in partition.items():
+        by_name[col] = pa.array([value] * n, pa.string())
     if "_run_id" in columns:
         by_name["_run_id"] = pa.array([run_id] * n, pa.string())
     arrays, names = [], []
@@ -51,28 +52,31 @@ def _to_copy_batch(
 def replace_partition(
     conn: Any,
     table: str,
-    partition_col: str,
-    value: str,
+    partition: dict[str, str],
     batches: Iterable[pa.RecordBatch],
     run_id: str | None = None,
 ) -> int:
-    """DELETE the partition and COPY all batches in one transaction. Returns rows loaded."""
+    """DELETE the partition and COPY all batches in one transaction. Returns rows loaded.
+
+    partition maps column -> value, e.g. {"pickup_month": "2026-06"} or, for a
+    quarantine batch, {"pickup_month": "2026-06", "batch_id": "..."}.
+    """
     table_cols = _table_columns(conn, table)
-    load_cols = [c for c in table_cols if c != "_loaded_at"]
+    load_cols = [c for c in table_cols if c not in ("_loaded_at", "quarantined_at")]
     schema, name = table.split(".")
     ident = sql.Identifier(schema, name)
+    where = sql.SQL(" AND ").join(sql.SQL("{} = %s").format(sql.Identifier(c)) for c in partition)
     rows = 0
     copy_cols: list[str] | None = None
     dropped: set[str] = set()
 
     with conn.transaction():
         deleted = conn.execute(
-            sql.SQL("DELETE FROM {} WHERE {} = %s").format(ident, sql.Identifier(partition_col)),
-            (value,),
+            sql.SQL("DELETE FROM {} WHERE {}").format(ident, where), list(partition.values())
         ).rowcount
         for batch in batches:
             dropped |= {n.lower() for n in batch.schema.names} - set(table_cols)
-            copy_batch = _to_copy_batch(batch, load_cols, partition_col, value, run_id)
+            copy_batch = _to_copy_batch(batch, load_cols, partition, run_id)
             if copy_cols is None:
                 copy_cols = copy_batch.schema.names
             buf = io.BytesIO()
@@ -86,7 +90,5 @@ def replace_partition(
 
     if dropped:
         log.warning("%s: columns not in table, not loaded: %s", table, sorted(dropped))
-    log.info(
-        "%s %s=%s: deleted %s rows, loaded %s rows", table, partition_col, value, deleted, rows
-    )
+    log.info("%s %s: deleted %s rows, loaded %s rows", table, partition, deleted, rows)
     return rows

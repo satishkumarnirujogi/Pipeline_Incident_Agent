@@ -121,6 +121,8 @@ ALTER DEFAULT PRIVILEGES FOR ROLE pipeline IN SCHEMA raw, staging, marts, quaran
 -- No CREATE on any schema and no ownership, so no DROP, ALTER, TRUNCATE or other DDL.
 ALTER DEFAULT PRIVILEGES FOR ROLE pipeline IN SCHEMA raw, quarantine
     GRANT INSERT, DELETE ON TABLES TO agent_rw;
+-- Default privileges only cover tables created later; raw.* above already exists.
+GRANT INSERT, DELETE ON ALL TABLES IN SCHEMA raw, quarantine TO agent_rw;
 ALTER DEFAULT PRIVILEGES FOR ROLE pipeline IN SCHEMA raw, quarantine
     GRANT USAGE ON SEQUENCES TO agent_rw;
 GRANT INSERT, UPDATE ON ops.column_mapping TO agent_rw;

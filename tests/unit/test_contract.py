@@ -6,6 +6,7 @@ import pytest
 from common.contract import (
     ColumnMapping,
     ContractViolation,
+    QuarantineRule,
     apply_mappings,
     load_contract,
     validate_trips,
@@ -100,6 +101,72 @@ def test_apply_mappings_leaves_unmapped_columns():
     batch = pa.record_batch({"a": [1], "b": [2]})
     out = apply_mappings(batch, [ColumnMapping("a", "x")])
     assert out.schema.names == ["x", "b"]
+
+
+# ---------------------------------------------------------------- quarantine
+
+
+def test_quarantine_rule_diverts_null_spike_and_passes(tmp_path, trips_contract):
+    counts = pa.array([None if i % 2 else 1 for i in range(20)], pa.int64())
+    path = _write(tmp_path, _trips(passenger_count=counts))
+    rule = QuarantineRule("b-1", "passenger_count", "is_null")
+    result = validate_trips(
+        path, trips_contract, [], MONTH, tmp_path / "o.parquet", [rule], None, tmp_path / "q"
+    )
+    assert result.rows == 20 and result.kept_rows == 10
+    assert result.quarantined == {"b-1": 10}
+    assert pq.read_table(tmp_path / "q" / "b-1.parquet").num_rows == 10
+    assert pq.read_table(tmp_path / "o.parquet")["passenger_count"].null_count == 0
+
+
+def test_min_rows_counts_input_rows_not_kept_rows(tmp_path, trips_contract):
+    trips_contract["checks"]["min_rows"] = 15
+    fares = pa.array([-999.0 if i < 10 else 10.0 for i in range(20)])
+    rule = QuarantineRule("b-2", "fare_amount", "lt", 0.0)
+    result = validate_trips(
+        _write(tmp_path, _trips(fare_amount=fares)),
+        trips_contract,
+        [],
+        MONTH,
+        tmp_path / "o.parquet",
+        [rule],
+        None,
+        tmp_path / "q",
+    )
+    assert result.kept_rows == 10  # below min_rows, but 20 rows arrived
+
+
+def test_not_in_dim_matches_source_column_names(tmp_path, trips_contract):
+    zones = pa.array([1 if i % 4 else 999 for i in range(20)], pa.int32())
+    rule = QuarantineRule("b-3", "pulocationid", "not_in_dim")
+    result = validate_trips(
+        _write(tmp_path, _trips(PULocationID=zones)),
+        trips_contract,
+        [],
+        MONTH,
+        tmp_path / "o.parquet",
+        [rule],
+        pa.array([1, 2], pa.int64()),
+        tmp_path / "q",
+    )
+    assert result.quarantined == {"b-3": 5}
+
+
+def test_failed_contract_leaves_no_quarantine_files(tmp_path, trips_contract):
+    trips_contract["checks"]["min_rows"] = 100
+    rule = QuarantineRule("b-4", "fare_amount", "gt", 5.0)
+    with pytest.raises(ContractViolation):
+        validate_trips(
+            _write(tmp_path, _trips()),
+            trips_contract,
+            [],
+            MONTH,
+            tmp_path / "o.parquet",
+            [rule],
+            None,
+            tmp_path / "q",
+        )
+    assert list((tmp_path / "q").glob("*")) == []
 
 
 # ------------------------------------------------------------------- weather

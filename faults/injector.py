@@ -227,6 +227,23 @@ def _revert_sql(sc: Scenario) -> dict:
     return {"run_id": run_id, "deleted": deleted}
 
 
+def clear_agent_changes(month: str | None = None) -> dict:
+    """Undo what agents may have changed while handling a scenario: column mappings and
+    quarantine rules (and their quarantined rows). A clean platform has neither."""
+    with _warehouse() as conn:
+        mappings = conn.execute("DELETE FROM ops.column_mapping").rowcount
+        rules = conn.execute(
+            "UPDATE ops.quarantine_rules SET active = false, restored_at = now() "
+            "WHERE active AND (%(m)s::text IS NULL OR month = %(m)s)",
+            {"m": month},
+        ).rowcount
+        rows = conn.execute(
+            "DELETE FROM quarantine.yellow_trips WHERE %(m)s::text IS NULL OR pickup_month = %(m)s",
+            {"m": month},
+        ).rowcount
+    return {"mappings_deleted": mappings, "rules_disabled": rules, "quarantined_rows_deleted": rows}
+
+
 # ----------------------------------------------------------- proxy mechanism
 
 
@@ -287,7 +304,7 @@ def apply(sc: Scenario, eval_run_id: str | None = None) -> dict:
 
 def revert(sc: Scenario, eval_run_id: str | None = None) -> dict:
     release(sc.month)  # restores the clean landing file and weather cache
-    details: dict[str, Any] = {"released": sc.month}
+    details: dict[str, Any] = {"released": sc.month, **clear_agent_changes(sc.month)}
     if sc.mechanism == "sql":
         details |= _revert_sql(sc)
     elif sc.mechanism == "proxy":
@@ -306,6 +323,7 @@ def reset_all() -> None:
         release(month)
     _proxy({"mode": "normal", "duration_s": 1})
     restore_connection()
+    clear_agent_changes()
     for sc in load_all():
         if sc.mechanism == "sql":
             _revert_sql(sc)
