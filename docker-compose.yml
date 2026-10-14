@@ -1,0 +1,148 @@
+# Low-memory mode (guide step 0.2b): per-service limits keep the stack inside
+# a 5 GB Docker cap. Limits are ceilings; check real use with `docker stats`.
+
+x-airflow-env: &airflow-env
+  AIRFLOW__CORE__EXECUTOR: LocalExecutor
+  AIRFLOW__CORE__PARALLELISM: "2"
+  AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: "2"
+  AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG: "1"
+  AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+  AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "False"
+  AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+  AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: "${AIRFLOW_USER}:admin"
+  AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE: /opt/airflow/config/simple_auth_manager_passwords.json
+  AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET}
+  AIRFLOW__API__SECRET_KEY: ${AIRFLOW_API_SECRET_KEY}
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD}@postgres:5432/airflow
+  # Warehouse connection used by the DAGs (F10 changes its password through the REST API)
+  AIRFLOW_CONN_WAREHOUSE: postgresql://pipeline:${PIPELINE_DB_PASSWORD}@postgres:5432/warehouse
+  INCIDENT_WEBHOOK_URL: ${INCIDENT_WEBHOOK_URL}
+  WEATHER_PROXY_URL: ${WEATHER_PROXY_URL}
+
+x-app: &app
+  build: .
+  image: pia-app:dev
+  env_file: .env
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    command: >
+      postgres -c shared_buffers=128MB -c work_mem=16MB
+               -c maintenance_work_mem=64MB -c max_connections=60
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD}
+      AIRFLOW_DB_PASSWORD: ${AIRFLOW_DB_PASSWORD}
+      PIPELINE_DB_PASSWORD: ${PIPELINE_DB_PASSWORD}
+      AGENT_RO_PASSWORD: ${AGENT_RO_PASSWORD}
+      AGENT_RW_PASSWORD: ${AGENT_RW_PASSWORD}
+      AGENT_APP_PASSWORD: ${AGENT_APP_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/initdb.sh:/docker-entrypoint-initdb.d/00_initdb.sh:ro
+      - ./db/init.sql:/opt/db/init.sql:ro
+    ports: ["${POSTGRES_HOST_PORT:-5433}:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 768m
+    restart: unless-stopped
+
+  redis:
+    image: redis:7
+    # noeviction: Redis must never silently drop queued Celery jobs
+    command: redis-server --maxmemory 48mb --maxmemory-policy noeviction
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 64m
+    restart: unless-stopped
+
+  airflow:
+    build: ./airflow
+    image: pia-airflow:dev
+    command: airflow standalone
+    environment: *airflow-env
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/config:/opt/airflow/config
+      - ./dbt:/opt/dbt
+      - ./contracts:/opt/contracts:ro
+      - ./data:/opt/data
+    ports: ["8080:8080"]
+    depends_on:
+      postgres: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "-s", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 90s
+    mem_limit: 2g
+    restart: unless-stopped
+
+  weather-proxy:
+    <<: *app
+    command: uvicorn services.weather_proxy.app:app --host 0.0.0.0 --port 8090
+    volumes:
+      - ./data:/app/data
+    ports: ["${WEATHER_PROXY_HOST_PORT:-8091}:8090"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8090/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    mem_limit: 128m
+
+  api:
+    <<: *app
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    ports: ["8000:8000"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    mem_limit: 256m
+
+  worker:
+    <<: *app
+    command: celery -A worker.celery_app:celery_app worker --concurrency=1 --pool=solo --loglevel=INFO
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A worker.celery_app:celery_app inspect ping -d celery@$$HOSTNAME --timeout 5"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 30s
+    mem_limit: 768m
+
+  ui:
+    <<: *app
+    command: streamlit run ui/streamlit_app.py --server.port 8501 --server.address 0.0.0.0 --server.headless true
+    ports: ["8501:8501"]
+    depends_on:
+      api: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    mem_limit: 384m
+
+volumes:
+  pgdata:

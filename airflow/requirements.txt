@@ -1,0 +1,5 @@
+pyarrow
+pandas
+psycopg[binary]
+httpx
+pyyaml

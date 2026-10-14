@@ -1,0 +1,12 @@
+# OpenRouter list prices in USD per million tokens, read from
+# https://openrouter.ai/api/v1/models on 2026-10-14. Update when prices change
+# and note the date. eur_per_usd converts to the EUR budgets in .env.
+as_of: "2026-10-14"
+eur_per_usd: 0.92
+models:
+  anthropic/claude-haiku-5.5:
+    input_usd_per_m: 0.10
+    output_usd_per_m: 0.50
+  deepseek/deepseek-v4-flash:
+    input_usd_per_m: 0.091
+    output_usd_per_m: 0.182

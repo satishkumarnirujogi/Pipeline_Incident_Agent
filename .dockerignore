@@ -1,0 +1,12 @@
+.git
+.venv
+.env
+data
+airflow
+dbt
+eval/reports
+notebooks
+**/__pycache__
+.pytest_cache
+.mypy_cache
+.ruff_cache

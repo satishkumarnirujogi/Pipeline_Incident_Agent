@@ -1,0 +1,59 @@
+[project]
+name = "pipeline-incident-agent"
+version = "0.1.0"
+description = "LangGraph multi-agent system that diagnoses and repairs Airflow/dbt pipeline incidents"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.20.0",
+    "celery[redis]>=5.6.3",
+    "fastapi>=0.143.1",
+    "fastembed>=0.9.0",
+    "httpx>=0.28.1",
+    "langchain-openai>=1.7.2",
+    "langfuse>=5.0.1",
+    "langgraph>=1.2.15",
+    "langgraph-checkpoint-postgres>=3.1.3",
+    "pandas>=3.0.6",
+    "pgvector>=0.5.1",
+    "psycopg[binary,pool]>=3.3.6",
+    "pyarrow>=26.0.0",
+    "pydantic>=2",
+    "pydantic-settings>=2.16.0",
+    "pyyaml>=6.0.3",
+    "redis>=6.4.0",
+    "sqlalchemy>=2",
+    "sqlglot>=30.22.0",
+    "streamlit>=1.66.0",
+    "structlog>=26.1.0",
+    "tenacity>=9.2.1",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=2.4.0",
+    "pre-commit>=4.7.0",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "respx>=0.23.1",
+    "ruff>=0.17.0",
+    "testcontainers>=4.15.0",
+    "types-pyyaml>=6.0.12.20260906",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["airflow/logs", "dbt"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "BLE"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
