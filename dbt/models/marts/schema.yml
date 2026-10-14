@@ -1,0 +1,18 @@
+version: 2
+
+models:
+  - name: dim_zones
+    columns:
+      - name: location_id
+        data_tests: [not_null, unique]
+
+  - name: fct_trips
+    columns:
+      - name: trip_id
+        data_tests: [not_null, unique]
+
+  - name: agg_hourly_zone_demand
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [pu_location_id, pickup_hour]

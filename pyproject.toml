@@ -60,3 +60,5 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# airflow/plugins is on Airflow's sys.path; mirror that so tests import common.*
+pythonpath = [".", "airflow/plugins"]

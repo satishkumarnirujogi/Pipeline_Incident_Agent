@@ -1,0 +1,35 @@
+name: pipeline_incident_agent
+version: "1.0.0"
+profile: pia
+config-version: 2
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+target-path: target
+clean-targets: [target, dbt_packages]
+
+vars:
+  month: "2026-06"
+  # Share of negative fares above which the build fails. Baseline 0.36-0.42%
+  # (docs/data_profile.md); F06 sets ~5% of fares to -999.
+  max_negative_fare_share: 0.02
+
+seeds:
+  pipeline_incident_agent:
+    +schema: staging
+    taxi_zones:
+      +column_types:
+        LocationID: integer
+        Borough: text
+        Zone: text
+        service_zone: text
+
+models:
+  pipeline_incident_agent:
+    staging:
+      +schema: staging
+      +materialized: table
+    marts:
+      +schema: marts

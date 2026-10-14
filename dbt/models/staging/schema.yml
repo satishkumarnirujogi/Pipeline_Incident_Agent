@@ -1,0 +1,50 @@
+version: 2
+
+# dbt tests are the data-quality layer for value rules. Severities come from
+# docs/data_profile.md: normal noise warns, real problems fail.
+
+models:
+  - name: stg_yellow_trips
+    columns:
+      - name: trip_id
+        data_tests:
+          - not_null
+          - unique          # F05 (duplicate load) fails here; clean baseline is 0 duplicates
+      - name: pu_location_id
+        data_tests:
+          - relationships:  # F07 (orphan zone 999) fails here; clean baseline is 0 orphans
+              arguments:
+                to: ref('dim_zones')
+                field: location_id
+      - name: do_location_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_zones')
+                field: location_id
+      - name: trip_distance
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 200
+              config:
+                severity: warn  # <0.01% of clean rows are extreme outliers
+      - name: fare_amount
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: -1000
+                max_value: 10000
+              config:
+                severity: warn  # clean min is about -1000 (refunds), max about 5,500
+
+  - name: stg_weather_hourly
+    columns:
+      - name: weather_hour
+        data_tests: [not_null, unique]
+
+  - name: stg_zones
+    columns:
+      - name: location_id
+        data_tests: [not_null, unique]

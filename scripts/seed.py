@@ -40,6 +40,7 @@ MANIFEST = RAW / "manifest.json"
 LANDING_TRIPS = DATA / "landing" / "trips"
 LANDING_ZONES = DATA / "landing" / "zones"
 PROXY_CACHE = DATA / "proxy_cache" / "weather"
+DBT_SEED_ZONES = Path("dbt/seeds/taxi_zones.csv")
 
 TLC = "https://d37ci6vzurychx.cloudfront.net"
 OPEN_METEO = "https://archive-api.open-meteo.com/v1/archive"
@@ -206,7 +207,7 @@ def write_manifest(months: list[str]) -> None:
 
 
 def seed_landing(months: list[str]) -> list[str]:
-    """Month 1 only: trips into landing, weather into the proxy cache, zones into landing."""
+    """Month 1 trips into landing, its weather into the proxy cache; zones into landing and dbt."""
     month = months[0]
     copies = [
         (
@@ -215,6 +216,7 @@ def seed_landing(months: list[str]) -> list[str]:
         ),
         (WEATHER / f"{month}.json", PROXY_CACHE / f"{month}.json"),
         (ZONES, LANDING_ZONES / ZONES.name),
+        (ZONES, DBT_SEED_ZONES),
     ]
     done = []
     for src, dest in copies:

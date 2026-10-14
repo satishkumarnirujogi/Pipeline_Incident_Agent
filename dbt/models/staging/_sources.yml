@@ -1,0 +1,10 @@
+version: 2
+
+sources:
+  - name: raw
+    schema: raw
+    tables:
+      - name: yellow_trips
+        description: One partition per pickup_month, loaded by ingest_taxi_trips.
+      - name: weather_hourly
+        description: One partition per month, loaded by ingest_weather.

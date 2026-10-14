@@ -1,4 +1,4 @@
-.PHONY: up up-pipeline down reset ps logs stats seed profile backfill eval test lint fmt check-llm
+.PHONY: up up-pipeline down reset ps logs stats seed profile bootstrap backfill eval test lint fmt check-llm
 
 COMPOSE := docker compose
 
@@ -29,7 +29,10 @@ seed:          ## Phase 1
 profile:       ## baselines -> docs/data_profile.md
 	uv run python -m scripts.profile_data
 
-backfill:      ## Phase 2
+bootstrap:     ## Airflow warehouse connection + unpause DAGs
+	uv run python -m scripts.bootstrap_airflow
+
+backfill:      ## first clean runs for month 1
 	uv run python -m scripts.backfill
 
 eval:          ## Phase 9

@@ -1,0 +1,12 @@
+pia:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: "{{ env_var('POSTGRES_HOST', 'postgres') }}"
+      port: "{{ env_var('POSTGRES_PORT', '5432') | int }}"
+      user: pipeline
+      password: "{{ env_var('PIPELINE_DB_PASSWORD') }}"
+      dbname: warehouse
+      schema: staging
+      threads: 1   # low-memory mode

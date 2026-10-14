@@ -20,3 +20,7 @@ dbt/logs/
 
 eval/reports/*
 !eval/reports/.gitkeep
+
+# copied by make seed from data/raw_cache
+dbt/seeds/taxi_zones.csv
+dbt/.user.yml

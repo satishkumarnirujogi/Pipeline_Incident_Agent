@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     agent_app_password: str = ""
     agent_ro_password: str = ""
     agent_rw_password: str = ""
+    pipeline_db_password: str = ""  # only operator scripts use it; agents never do
 
     redis_url: str = "redis://localhost:6379/0"
 

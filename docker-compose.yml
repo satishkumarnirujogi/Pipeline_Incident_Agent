@@ -14,8 +14,14 @@ x-airflow-env: &airflow-env
   AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET}
   AIRFLOW__API__SECRET_KEY: ${AIRFLOW_API_SECRET_KEY}
   AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD}@postgres:5432/airflow
-  # Warehouse connection used by the DAGs (F10 changes its password through the REST API)
-  AIRFLOW_CONN_WAREHOUSE: postgresql://pipeline:${PIPELINE_DB_PASSWORD}@postgres:5432/warehouse
+  # The DAGs' warehouse credentials live in the Airflow connection `warehouse`, created
+  # in the metadata DB by scripts/bootstrap_airflow.py (env-var connections cannot be
+  # changed through the REST API, which fault F10 needs). dbt reads these instead:
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  PIPELINE_DB_PASSWORD: ${PIPELINE_DB_PASSWORD}
+  DATA_DIR: /opt/data
+  CONTRACTS_DIR: /opt/contracts
   INCIDENT_WEBHOOK_URL: ${INCIDENT_WEBHOOK_URL}
   WEATHER_PROXY_URL: ${WEATHER_PROXY_URL}
 
