@@ -418,16 +418,13 @@ def run_readonly_sql(a: SqlIn, ctx: ToolContext) -> dict:
 
 class HealthIn(Args):
     month: Month | None = None
+    wait_until_healthy_s: int = Field(default=0, ge=0, le=300)
 
 
-@tool_spec(
-    tier=TIER_READONLY, input_model=HealthIn, agents={"diagnostics", "remediation"}, timeout_s=15
-)
-def check_api_health(a: HealthIn, ctx: ToolContext) -> dict:
-    """Probe the weather API (the data endpoint for a month, or /health). Reports status code
-    and latency; an unreachable or slow API is a result here, not an error."""
-    url = get_settings().proxy_url
-    target = f"{url}/v1/archive?month={a.month}" if a.month else f"{url}/health"
+HEALTH_POLL_S = 15
+
+
+def _probe(target: str) -> dict[str, Any]:
     started = time.monotonic()
     try:
         r = httpx.get(target, timeout=5)
@@ -450,9 +447,28 @@ def check_api_health(a: HealthIn, ctx: ToolContext) -> dict:
         "status_code": r.status_code,
         "latency_ms": int((time.monotonic() - started) * 1000),
     }
-    if a.month and r.status_code == 200:
+    if "/v1/archive" in target and r.status_code == 200:
         out["hours_returned"] = len(r.json().get("hourly", {}).get("time", []))
     return out
+
+
+@tool_spec(
+    tier=TIER_READONLY, input_model=HealthIn, agents={"diagnostics", "remediation"}, timeout_s=330
+)
+def check_api_health(a: HealthIn, ctx: ToolContext) -> dict:
+    """Probe the weather API (the data endpoint for a month, or /health). Reports status code
+    and latency; an unreachable or slow API is a result here, not an error. With
+    wait_until_healthy_s, keeps probing until it is healthy or the wait is over."""
+    url = get_settings().proxy_url
+    target = f"{url}/v1/archive?month={a.month}" if a.month else f"{url}/health"
+    deadline = time.monotonic() + a.wait_until_healthy_s
+    probes = 1
+    out = _probe(target)
+    while not out["healthy"] and time.monotonic() + HEALTH_POLL_S <= deadline:
+        time.sleep(HEALTH_POLL_S)
+        out = _probe(target)
+        probes += 1
+    return {**out, "probes": probes}
 
 
 # ------------------------------------------------------------------- memory

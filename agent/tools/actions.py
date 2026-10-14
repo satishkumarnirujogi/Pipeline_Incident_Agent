@@ -91,16 +91,19 @@ def _check_target(a: MappingIn) -> None:
 
 
 def _mapping_preview(a: MappingIn, ctx: ToolContext) -> dict:
-    """Schema diff before and after the proposed mapping, for the newest landing file."""
+    """Schema diff before and after the proposed mapping, for the incident's landing file
+    (the newest one if the month is unknown)."""
     _check_target(a)
-    months = sorted(
-        p.stem.rsplit("_", 1)[-1]
-        for p in landing_trips_path("2000-01").parent.glob("yellow_tripdata_*.parquet")
-        if p.stat().st_size > 0
-    )
-    if not months:
-        return {"note": "no landing file to preview against"}
-    month = months[-1]
+    month = ctx.month
+    if month is None:
+        months = sorted(
+            p.stem.rsplit("_", 1)[-1]
+            for p in landing_trips_path("2000-01").parent.glob("yellow_tripdata_*.parquet")
+            if p.stat().st_size > 0
+        )
+        if not months:
+            return {"note": "no landing file to preview against"}
+        month = months[-1]
     proposed = {"source_col": a.source_col, "target_col": a.target_col, "transform": a.transform}
     return {
         "month": month,

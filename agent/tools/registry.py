@@ -80,6 +80,7 @@ class ToolContext:
     # crash-and-redo of the same step is a no-op but a deliberate second rerun is not.
     step: int = 0
     attempt: int = 1
+    month: str | None = None  # the incident's month, for previews
     store: ToolStore = field(default_factory=PostgresToolStore)
 
 
