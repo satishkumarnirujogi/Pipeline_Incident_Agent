@@ -1,0 +1,46 @@
+# Data contract for one month of yellow taxi trips (20% sample).
+# Thresholds come from docs/data_profile.md (2026-06..08) plus a margin.
+#
+# Scope: structure and completeness only. Value rules (negative fares,
+# distance range, zone foreign keys, uniqueness) are dbt tests, so faults
+# F05-F07 fail in dbt, as faults/catalog.md expects, and F01/F02/F04 fail here.
+dataset: yellow_trips
+version: 1
+partition_by: pickup_month
+landing_path: trips/yellow_tripdata_{month}.parquet
+
+# payment_type is part of the key: upstream re-sends some trips with
+# payment_type 0 and every other field equal (0.08-0.12% of rows in 07/08).
+natural_key:
+  - VendorID
+  - tpep_pickup_datetime
+  - tpep_dropoff_datetime
+  - PULocationID
+  - DOLocationID
+  - total_amount
+  - payment_type
+
+# type: int = any integer, float = any floating point, timestamp = any timestamp.
+columns:
+  VendorID:              {type: int, nullable: false}
+  tpep_pickup_datetime:  {type: timestamp, nullable: false}
+  tpep_dropoff_datetime: {type: timestamp, nullable: false}
+  # Baseline null rate 26.4-27.6%: upstream leaves it empty on about a quarter
+  # of trips. F04 nulls ~40% of rows, which lands around 56%.
+  passenger_count:       {type: int, nullable: true, max_null_rate: 0.35}
+  trip_distance:         {type: float, nullable: false}
+  PULocationID:          {type: int, nullable: false}
+  DOLocationID:          {type: int, nullable: false}
+  payment_type:          {type: int, nullable: false}
+  fare_amount:           {type: float, nullable: false}
+  total_amount:          {type: float, nullable: false}
+
+checks:
+  # Sampled baseline 667,344-767,450 rows; ~75% of the smallest month.
+  min_rows: 500000
+  # Baseline <= 0.001%; a wrong-month file would be close to 100%.
+  max_pickup_outside_month_rate: 0.001
+
+# New upstream columns (e.g. cbd_congestion_fee, request_source in 2026) are
+# logged as a warning, not fatal.
+allow_extra_columns: true

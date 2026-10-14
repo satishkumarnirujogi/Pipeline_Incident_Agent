@@ -1,0 +1,25 @@
+# Data contract for one month of hourly NYC weather from the weather proxy.
+# The profile (docs/data_profile.md) covers summer only, so value ranges are
+# plausible NYC year-round bounds rather than observed min/max.
+dataset: weather_hourly
+version: 1
+partition_by: month
+source: "{WEATHER_PROXY_URL}/v1/archive?month={month}"
+
+columns:
+  time:           {type: timestamp, nullable: false}
+  temperature_2m: {type: float, nullable: false, min: -30, max: 45}   # degC; observed 10.8-40.7
+  precipitation:  {type: float, nullable: false, min: 0, max: 100}    # mm/h; observed max 15
+  rain:           {type: float, nullable: false, min: 0, max: 100}    # mm/h
+  snowfall:       {type: float, nullable: false, min: 0, max: 50}     # cm/h
+  wind_speed_10m: {type: float, nullable: false, min: 0, max: 150}    # km/h; observed max 31.4
+
+checks:
+  # Baseline: every day has 24 hours, no gaps or duplicates (all 3 months).
+  # F09 drops 4 hours on some days, which fails these.
+  hours_per_day: 24
+  rows_equal_days_times_24: true
+  no_duplicate_hours: true
+  all_hours_in_month: true
+
+allow_extra_columns: false

@@ -1,4 +1,4 @@
-.PHONY: up up-pipeline down reset ps logs stats seed backfill eval test lint fmt check-llm
+.PHONY: up up-pipeline down reset ps logs stats seed profile backfill eval test lint fmt check-llm
 
 COMPOSE := docker compose
 
@@ -25,6 +25,9 @@ stats:
 
 seed:          ## Phase 1
 	uv run python -m scripts.seed
+
+profile:       ## baselines -> docs/data_profile.md
+	uv run python -m scripts.profile_data
 
 backfill:      ## Phase 2
 	uv run python -m scripts.backfill

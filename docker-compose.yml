@@ -93,6 +93,8 @@ services:
   weather-proxy:
     <<: *app
     command: uvicorn services.weather_proxy.app:app --host 0.0.0.0 --port 8090
+    environment:
+      WEATHER_CACHE_DIR: /app/data/proxy_cache/weather
     volumes:
       - ./data:/app/data
     ports: ["${WEATHER_PROXY_HOST_PORT:-8091}:8090"]

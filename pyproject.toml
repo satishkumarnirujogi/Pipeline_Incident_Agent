@@ -50,6 +50,9 @@ extend-exclude = ["airflow/logs", "dbt"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "BLE"]
 
+[tool.ruff.lint.per-file-ignores]
+"scripts/profile_data.py" = ["E501"]  # Markdown table text
+
 [tool.mypy]
 python_version = "3.12"
 ignore_missing_imports = true

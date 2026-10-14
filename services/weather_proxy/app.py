@@ -14,7 +14,7 @@ from typing import Literal
 from fastapi import FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
-CACHE_DIR = Path(os.environ.get("WEATHER_CACHE_DIR", "data/raw_cache/weather"))
+CACHE_DIR = Path(os.environ.get("WEATHER_CACHE_DIR", "data/proxy_cache/weather"))
 CONTROL_TOKEN = os.environ.get("WEATHER_PROXY_CONTROL_TOKEN", "")
 
 Mode = Literal["normal", "http_503", "timeout", "drop_hours"]
@@ -68,7 +68,7 @@ async def archive(month: str = Query(pattern=r"^\d{4}-\d{2}$")) -> dict:
     path = CACHE_DIR / f"{month}.json"
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"no cached weather for {month}")
-    payload = json.loads(path.read_text())
+    payload = json.loads(path.read_text(encoding="utf-8"))
 
     if mode == "drop_hours":
         hourly = payload["hourly"]
