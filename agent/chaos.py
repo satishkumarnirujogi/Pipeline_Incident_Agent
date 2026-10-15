@@ -25,6 +25,7 @@ from pathlib import Path
 
 import yaml
 
+from agent import telemetry
 from agent.settings import get_settings
 from agent.tools.errors import ToolTimeout, UpstreamError
 
@@ -92,7 +93,7 @@ def before_primary_llm(node: str) -> None:
     'down', otherwise at llm_failure_rate."""
     if not enabled():
         return
-    incident = _current_incident
+    incident = _current_incident or telemetry.current_incident()
     if incident and scenario_flag(incident, "primary_down_scenarios"):
         raise ChaosRateLimit(f"{node}: primary provider unavailable (chaos)")
     if _draw(incident, "llm") < rates().get("llm_failure_rate", 0.0):

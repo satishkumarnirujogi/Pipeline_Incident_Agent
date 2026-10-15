@@ -146,7 +146,7 @@ class StubModel:
         stub = self
 
         class Structured:
-            def invoke(self, messages):
+            def invoke(self, messages, config=None):
                 stub.calls += 1
                 return {
                     "raw": AIMessage(""),
@@ -156,7 +156,7 @@ class StubModel:
 
         return Structured()
 
-    def invoke(self, messages):
+    def invoke(self, messages, config=None):
         self.calls += 1
         if self.error:
             raise self.error
@@ -268,7 +268,7 @@ def test_hung_model_call_times_out_and_falls_back(monkeypatch):
     monkeypatch.setattr(llm_mod, "CALL_TIMEOUT_S", 0.3)
 
     class Hanging(StubModel):
-        def invoke(self, messages):
+        def invoke(self, messages, config=None):
             _time.sleep(2)
             return AIMessage("too late")
 

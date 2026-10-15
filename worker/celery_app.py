@@ -1,7 +1,9 @@
 """Celery app. One job per incident and per resume-after-approval."""
 
 from celery import Celery
+from celery.signals import setup_logging
 
+from agent import logs
 from agent.settings import get_settings
 
 _s = get_settings()
@@ -22,3 +24,9 @@ celery_app.conf.update(
         "expire-stale-approvals": {"task": "expire_stale_approvals", "schedule": 900.0},
     },
 )
+
+
+@setup_logging.connect
+def _json_logs(**_: object) -> None:
+    """Connecting this signal stops Celery from installing its own log format."""
+    logs.configure()

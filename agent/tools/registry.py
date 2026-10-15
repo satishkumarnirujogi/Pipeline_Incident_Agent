@@ -37,7 +37,7 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
-from agent import chaos
+from agent import chaos, tracing
 from agent.tools.errors import (
     ApprovalRequired,
     ErrorType,
@@ -237,6 +237,7 @@ def call_tool(name: str, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         result = ToolResult(ok=False, error_type=error_type, retryable=retryable, message=message)
 
     latency_ms = int((time.monotonic() - started) * 1000)
+    tracing.tool_span(name, args if isinstance(args, dict) else {}, result, latency_ms)
     _record(
         ctx,
         name,

@@ -27,12 +27,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import agent.tools  # noqa: F401 - registers tool input models for validating edits
+from agent import logs
 from agent.db import agent_engine
 from agent.models import Approval, Escalation, Incident, Postmortem
 from agent.settings import get_settings
 from agent.tools.registry import args_hash, validate_args
 
-log = logging.getLogger("uvicorn.error")
+logs.configure()
+log = logging.getLogger("api")
 
 app = FastAPI(title="Pipeline Incident Agent API")
 
@@ -77,15 +79,6 @@ def _incident_dict(i: Incident) -> dict[str, Any]:
 
 @app.post("/incidents", status_code=202)
 def create_incident(body: IncidentIn) -> JSONResponse:
-    # faults/verify.py counts this line; keep its format.
-    log.info(
-        "incident received dag_id=%s run_id=%s task_id=%s try=%s exception=%r",
-        body.dag_id,
-        body.run_id,
-        body.task_id,
-        body.try_number,
-        body.exception[:200],
-    )
     incident = Incident(
         id=uuid.uuid4(),
         dag_id=body.dag_id,
@@ -110,10 +103,25 @@ def create_incident(body: IncidentIn) -> JSONResponse:
                     Incident.task_id == body.task_id,
                 )
             ).scalar_one()
+            _log_received(body, str(existing.id), duplicate=True)
             return JSONResponse({"id": str(existing.id), "duplicate": True}, status_code=200)
         incident_id = str(incident.id)
+    _log_received(body, incident_id, duplicate=False)
     enqueue("run_incident", incident_id)
     return JSONResponse({"id": incident_id, "duplicate": False}, status_code=202)
+
+
+def _log_received(body: IncidentIn, incident_id: str, duplicate: bool) -> None:
+    # faults/verify.py counts these lines per Airflow run; keep the message format.
+    log.info(
+        "incident received dag_id=%s run_id=%s task_id=%s try=%s exception=%r",
+        body.dag_id,
+        body.run_id,
+        body.task_id,
+        body.try_number,
+        body.exception[:200],
+        extra={"incident_id": incident_id, "duplicate": duplicate},
+    )
 
 
 @app.get("/incidents")
@@ -228,6 +236,15 @@ def decide(approval_id: uuid.UUID, body: DecisionIn) -> dict:
         a.decided_at = datetime.now(UTC)
         s.commit()
         incident_id = a.incident_id
+    log.info(
+        "approval decided",
+        extra={
+            "incident_id": incident_id,
+            "approval_id": str(approval_id),
+            "decision": body.decision,
+            "decided_by": body.decided_by,
+        },
+    )
     enqueue("resume_incident", incident_id, str(approval_id))
     return {"id": str(approval_id), "decision": body.decision, "incident_id": incident_id}
 

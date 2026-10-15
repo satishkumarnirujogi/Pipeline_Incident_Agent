@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import uuid
+from collections.abc import Callable
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -23,7 +24,7 @@ from pydantic import ValidationError
 from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session
 
-from agent import chaos
+from agent import chaos, telemetry, tracing
 from agent.db import agent_engine
 from agent.graph import compile_graph, run_config
 from agent.models import Approval, Escalation, Incident
@@ -158,6 +159,26 @@ def _agent_failed(incident_id: str, exc: BaseException) -> str:
     return "failed"
 
 
+def _job(incident_id: str, kind: str, steps_before: int, invoke: Callable[[dict], dict]) -> str:
+    """One agent_runs row per worker job; the incident and run are bound for telemetry and
+    logs while the graph runs, so every LLM call and log line carries them."""
+    run_id = telemetry.start_run(incident_id, kind)
+    outcome, steps = "failed", 0
+    chaos.set_incident(incident_id)
+    try:
+        with telemetry.bind(incident_id, run_id), tracing.incident_trace(incident_id, kind):
+            try:
+                state = invoke(run_config(incident_id, tracing.callbacks()))
+            except Exception as exc:  # noqa: BLE001 - retries inside the graph are exhausted
+                return _agent_failed(incident_id, exc)
+            steps = max(0, state.get("steps", 0) - steps_before)
+            outcome = _after_invoke(incident_id, state)
+            return outcome
+    finally:
+        telemetry.end_run(run_id, outcome, steps)
+        chaos.set_incident(None)
+
+
 def _count_attempt(incident_id: str) -> int:
     with agent_engine().begin() as conn:
         return conn.execute(
@@ -189,29 +210,22 @@ def run_incident(incident_id: str) -> str:
             )
             _set_incident(incident_id, status="failed", resolved_at=datetime.now(UTC))
             return "failed"
-        chaos.set_incident(incident_id)
-        try:
-            if snapshot.next:
-                # A previous worker died mid-run: continue from the last checkpoint.
-                log.info(
-                    json.dumps(
-                        {
-                            "event": "recovering",
-                            "incident_id": incident_id,
-                            "next": list(snapshot.next),
-                            "attempt": attempt,
-                        }
-                    )
+        steps_before = (snapshot.values or {}).get("steps", 0)
+        if snapshot.next:
+            # A previous worker died mid-run: continue from the last checkpoint.
+            log.info(
+                json.dumps(
+                    {
+                        "event": "recovering",
+                        "incident_id": incident_id,
+                        "next": list(snapshot.next),
+                        "attempt": attempt,
+                    }
                 )
-                state = g.invoke(None, config)
-            else:
-                _set_incident(incident_id, status="running")
-                state = g.invoke({"incident_id": incident_id}, config)
-        except Exception as exc:  # noqa: BLE001 - retries inside the graph are exhausted
-            return _agent_failed(incident_id, exc)
-        finally:
-            chaos.set_incident(None)
-        return _after_invoke(incident_id, state)
+            )
+            return _job(incident_id, "recover", steps_before, lambda cfg: g.invoke(None, cfg))
+        _set_incident(incident_id, status="running")
+        return _job(incident_id, "run", 0, lambda cfg: g.invoke({"incident_id": incident_id}, cfg))
 
 
 def recover_orphans() -> list[str]:
@@ -247,17 +261,16 @@ def resume_incident(incident_id: str, approval_id: str) -> str:
         if not snapshot.interrupts and not snapshot.next:
             return snapshot.values.get("status", "unknown")
         _set_incident(incident_id, status="running")
-        chaos.set_incident(incident_id)
-        try:
-            if snapshot.interrupts:
-                state = g.invoke(Command(resume=decision), config)
-            else:
-                state = g.invoke(None, config)  # resumed before, then crashed: continue
-        except Exception as exc:  # noqa: BLE001
-            return _agent_failed(incident_id, exc)
-        finally:
-            chaos.set_incident(None)
-        return _after_invoke(incident_id, state)
+        steps_before = (snapshot.values or {}).get("steps", 0)
+        if snapshot.interrupts:
+            return _job(
+                incident_id,
+                "resume",
+                steps_before,
+                lambda cfg: g.invoke(Command(resume=decision), cfg),
+            )
+        # resumed before, then crashed: continue
+        return _job(incident_id, "recover", steps_before, lambda cfg: g.invoke(None, cfg))
 
 
 def expire_stale_approvals(now: datetime | None = None) -> list[tuple[str, str]]:

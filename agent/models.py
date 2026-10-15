@@ -16,6 +16,7 @@ from sqlalchemy import (
     DateTime,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -151,4 +152,46 @@ class IncidentMemory(Base):
     root_cause: Mapped[str] = mapped_column(String(64))
     fix: Mapped[str] = mapped_column(Text)
     embedding: Mapped[Any] = mapped_column(Vector(EMBEDDING_DIMS))
+    created_at: Mapped[datetime] = _now()
+
+
+class AgentRun(Base):
+    """One worker job on an incident: the first run, a resume after approval, or a recovery."""
+
+    __tablename__ = "agent_runs"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    incident_id: Mapped[str] = mapped_column(String(64), index=True)
+    kind: Mapped[str] = mapped_column(String(16))  # run | resume | recover
+    attempt: Mapped[int] = mapped_column(Integer)
+    started_at: Mapped[datetime] = _now()
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # awaiting_approval | resolved | escalated | failed
+    outcome: Mapped[str | None] = mapped_column(String(32))
+    steps: Mapped[int] = mapped_column(Integer, default=0)
+    tokens_in: Mapped[int] = mapped_column(Integer, default=0)
+    tokens_out: Mapped[int] = mapped_column(Integer, default=0)
+    cost_eur: Mapped[float] = mapped_column(Numeric(12, 8), default=0)
+
+
+class LLMCall(Base):
+    """Every model call, including failed, retried and chaos-injected ones."""
+
+    __tablename__ = "llm_calls"
+    __table_args__ = (Index("ix_llm_calls_incident", "incident_id"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    incident_id: Mapped[str] = mapped_column(String(64))
+    agent_run_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
+    node: Mapped[str] = mapped_column(String(64))
+    provider: Mapped[str] = mapped_column(String(32))
+    model: Mapped[str] = mapped_column(String(128))
+    tokens_in: Mapped[int] = mapped_column(Integer)
+    tokens_out: Mapped[int] = mapped_column(Integer)
+    cost_eur: Mapped[float] = mapped_column(Numeric(12, 8))
+    latency_ms: Mapped[int] = mapped_column(Integer)
+    ok: Mapped[bool] = mapped_column(Boolean)
+    error_type: Mapped[str | None] = mapped_column(String(32))
+    fallback_used: Mapped[bool] = mapped_column(Boolean)
+    chaos_injected: Mapped[bool] = mapped_column(Boolean)
     created_at: Mapped[datetime] = _now()

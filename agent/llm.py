@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import logging
+import time
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -19,10 +20,12 @@ from typing import Any
 import yaml
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
+from langgraph.config import get_config
 from pydantic import BaseModel, SecretStr, ValidationError
 
-from agent import chaos
+from agent import chaos, telemetry
 from agent.settings import get_settings
 
 log = logging.getLogger(__name__)
@@ -40,6 +43,15 @@ class LLMTimeout(Exception):  # noqa: N818
 class LLMUnavailable(Exception):  # noqa: N818
     """Primary and fallback both failed. A plain Exception on purpose: LangGraph's node
     retry policy retries it (it does not retry RuntimeError)."""
+
+
+def _parent_config() -> RunnableConfig | None:
+    """The calling graph node's config, so model calls (run in a worker thread for the
+    timeout) stay nested under the node in traces. None outside a graph."""
+    try:
+        return get_config()
+    except RuntimeError:
+        return None
 
 
 def _bounded(fn: Any, *args: Any) -> Any:
@@ -131,10 +143,11 @@ class LLM:
         fallback: bool,
         error: str | None = None,
         chaos_hit: bool = False,
+        started: float | None = None,
     ) -> CallRecord:
         usage: dict[str, Any] = dict((msg.usage_metadata if msg is not None else None) or {})
         tin, tout = usage.get("input_tokens", 0), usage.get("output_tokens", 0)
-        return CallRecord(
+        rec = CallRecord(
             node=node,
             model=model,
             tokens_in=tin,
@@ -145,8 +158,13 @@ class LLM:
             error_type=error,
             chaos_injected=chaos_hit,
         )
+        latency_ms = int((time.monotonic() - started) * 1000) if started else 0
+        telemetry.record_llm_call(rec, latency_ms)
+        return rec
 
-    def _failed(self, node: str, name: str, fallback: bool, exc: Exception) -> CallRecord:
+    def _failed(
+        self, node: str, name: str, fallback: bool, exc: Exception, started: float
+    ) -> CallRecord:
         log.warning("%s: %s failed: %s", node, name, exc)
         error = (
             "rate_limit"
@@ -155,7 +173,7 @@ class LLM:
             if isinstance(exc, LLMTimeout)
             else type(exc).__name__
         )
-        return self._record(node, name, None, fallback, error, "(chaos)" in str(exc))
+        return self._record(node, name, None, fallback, error, "(chaos)" in str(exc), started)
 
     def with_tools(self, node: str, messages: list[BaseMessage], tools: list[dict]) -> LLMResult:
         """One tool-calling turn. Falls back to the other provider on any error."""
@@ -164,15 +182,16 @@ class LLM:
             (self.primary, self.primary_name, False),
             (self.fallback, self.fallback_name, True),
         ):
+            started = time.monotonic()
             try:
                 if not fallback:
                     chaos.before_primary_llm(node)
-                msg = _bounded(model.bind_tools(tools).invoke, messages)
-                result.calls.append(self._record(node, name, msg, fallback))
+                msg = _bounded(model.bind_tools(tools).invoke, messages, _parent_config())
+                result.calls.append(self._record(node, name, msg, fallback, started=started))
                 result.message = msg
                 return result
             except Exception as exc:  # noqa: BLE001 - provider error -> try the fallback
-                result.calls.append(self._failed(node, name, fallback, exc))
+                result.calls.append(self._failed(node, name, fallback, exc, started))
         raise LLMUnavailable(f"{node}: primary and fallback models both failed")
 
     def structured(
@@ -187,24 +206,27 @@ class LLM:
         ):
             attempt_msgs = list(messages)
             for _repair in range(2):
+                started = time.monotonic()
                 try:
                     if not fallback:
                         chaos.before_primary_llm(node)
                     runnable = model.with_structured_output(
                         schema, method="function_calling", include_raw=True
                     )
-                    out: Any = _bounded(runnable.invoke, attempt_msgs)
+                    out: Any = _bounded(runnable.invoke, attempt_msgs, _parent_config())
                 except Exception as exc:  # noqa: BLE001
-                    result.calls.append(self._failed(node, name, fallback, exc))
+                    result.calls.append(self._failed(node, name, fallback, exc, started))
                     break  # provider error: go to the fallback model
                 raw: AIMessage = out["raw"]
                 if out.get("parsed") is not None:
-                    result.calls.append(self._record(node, name, raw, fallback))
+                    result.calls.append(self._record(node, name, raw, fallback, started=started))
                     result.parsed = out["parsed"]
                     result.message = raw
                     return result
                 err = out.get("parsing_error")
-                result.calls.append(self._record(node, name, raw, fallback, "validation"))
+                result.calls.append(
+                    self._record(node, name, raw, fallback, "validation", started=started)
+                )
                 detail = err.errors() if isinstance(err, ValidationError) else str(err)
                 # Re-ask without the broken tool call (it would need a tool result).
                 attempt_msgs = [

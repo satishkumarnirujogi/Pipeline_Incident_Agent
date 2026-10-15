@@ -6,6 +6,7 @@ from collections import defaultdict
 
 from langchain_core.messages import AIMessage
 
+from agent import telemetry
 from agent.llm import CallRecord, LLMResult
 from agent.state import Diagnosis, Postmortem, ProposedAction, RemediationDecision
 
@@ -24,7 +25,9 @@ class FakeLLM:
         return self.script[node].pop(0)
 
     def _result(self, node: str, **kw) -> LLMResult:
-        return LLMResult(calls=[CallRecord(node, "fake", 100, 20, 0.001, True, False)], **kw)
+        record = CallRecord(node, "fake/model", 100, 20, 0.001, True, False)
+        telemetry.record_llm_call(record, latency_ms=5)  # like the real LLM wrapper
+        return LLMResult(calls=[record], **kw)
 
     def with_tools(self, node, messages, tools):
         answer = self._next(node, messages)
