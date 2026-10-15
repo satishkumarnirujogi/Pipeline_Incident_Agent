@@ -18,7 +18,7 @@ from langgraph.types import Command
 from agent import budget
 from agent.agents import common
 from agent.llm import get_llm
-from agent.state import IncidentState, RouteDecision
+from agent.state import IncidentState, RouteDecision, recommendation_for
 
 MIN_CONFIDENCE = 0.6
 MAX_DIAGNOSTIC_ATTEMPTS = 2
@@ -93,8 +93,8 @@ def supervisor(state: IncidentState) -> Command[Next]:
             f"confidence {diagnosis['confidence']} < {MIN_CONFIDENCE}",
             "code",
         )
-    # 4. escalation recommended, or rejected twice
-    if diagnosis["recommendation"] == "escalate":
+    # 4. a root cause only people can fix (policy, not the model's opinion), or rejected twice
+    if recommendation_for(diagnosis["root_cause"]) == "escalate":
         return _route(
             state,
             "escalate",

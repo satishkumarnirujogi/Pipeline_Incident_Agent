@@ -11,6 +11,9 @@ from pydantic import BaseModel, Field
 from agent.state import RootCause
 
 SCENARIO_DIR = Path(__file__).parent / "scenarios"
+# Quarantining more than this share of a month is not a fix, it is data loss: verification
+# fails above it, so scenarios whose expected fix needs more are generated as errors.
+MAX_QUARANTINE_SHARE = 0.7
 
 FaultType = Literal[
     "schema_drift",

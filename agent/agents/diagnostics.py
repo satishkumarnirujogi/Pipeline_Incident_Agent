@@ -14,7 +14,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from agent.agents import common
 from agent.llm import get_llm
-from agent.state import Diagnosis, IncidentState
+from agent.state import Diagnosis, IncidentState, recommendation_for
 from agent.tools.registry import tools_for
 
 MAX_TOOL_CALLS = 8
@@ -81,6 +81,16 @@ def diagnostics_finalize(state: IncidentState) -> dict:
     messages.append(HumanMessage("Give your Diagnosis now, based only on the evidence above."))
     result = get_llm().structured("diagnostics_finalize", messages, Diagnosis)
     diagnosis = result.parsed.model_dump(mode="json")  # type: ignore[union-attr]
+    policy = recommendation_for(diagnosis["root_cause"])
+    if diagnosis["recommendation"] != policy:
+        common.log_event(
+            state,
+            "recommendation_overridden",
+            root_cause=diagnosis["root_cause"],
+            model=diagnosis["recommendation"],
+            policy=policy,
+        )
+        diagnosis["recommendation"] = policy
     common.log_event(state, "diagnosis", **diagnosis)
     return {
         "diagnosis": diagnosis,

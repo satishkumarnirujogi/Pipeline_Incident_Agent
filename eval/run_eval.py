@@ -44,7 +44,7 @@ from scripts.airflow_client import AirflowClient
 log = logging.getLogger("eval")
 API = "http://localhost:8000"
 INCIDENT_WAIT_S = 300
-RESOLVE_TIMEOUT_S = 600
+RESOLVE_TIMEOUT_S = 1500  # an API outage may wait ~15 min (OUTAGE_CHECKS x OUTAGE_WAIT_S)
 WORKER = "pipeline-incident-agent-worker-1"
 
 

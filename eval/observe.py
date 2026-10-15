@@ -14,12 +14,11 @@ import psycopg
 
 from agent.settings import get_settings
 from eval.scoring import Facts
-from faults.scenario import Scenario
+from faults.scenario import MAX_QUARANTINE_SHARE, Scenario
 from faults.verify import run_dag
 from scripts.airflow_client import AirflowClient
 
 WEATHER_FAULTS = {"upstream_api_outage", "incomplete_api_payload"}
-MAX_QUARANTINE_SHARE = 0.7  # quarantining more than this is not a fix, it is data loss
 
 
 def _warehouse() -> psycopg.Connection:

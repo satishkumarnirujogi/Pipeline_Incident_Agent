@@ -33,10 +33,15 @@ INCIDENT = {
 def tools(monkeypatch):
     """Fake tools. chain_state controls what verification after a rerun sees."""
     calls: list[tuple[str, dict, str | None]] = []
-    behaviour = {"chain_state": "success"}
+    behaviour = {"chain_state": "success", "health": []}
 
     def run_tool(name, args, ctx):
         calls.append((name, args, ctx.approval_id))
+        if name == "check_api_health":
+            healthy = behaviour["health"].pop(0) if behaviour["health"] else True
+            return ToolResult(
+                ok=True, data={"healthy": healthy, "status_code": 200 if healthy else 503}
+            )
         if name == "rerun_dag":
             return ToolResult(
                 ok=True, data={"dag_id": args["dag_id"], "run_id": "r-new", "state": "queued"}
@@ -297,23 +302,88 @@ def test_edit_with_invalid_args_counts_as_rejection(tools):
     assert "upsert_column_mapping" not in names(tools)
 
 
-def test_remediation_cannot_call_actions_directly(tools):
-    weather = {"dag_id": "ingest_weather", "conf": {"month": "2026-06"}}
+def test_agents_cannot_call_actions_directly(tools):
     state, _, fake = run(
         {
-            "diagnostics": [done()],
-            "diagnostics_finalize": [diagnosis("UPSTREAM_API_OUTAGE")],
-            "remediation": [call("rerun_dag", weather), done()],
-            "remediation_finalize": [propose("rerun_dag", weather)],
+            "diagnostics": [call("rerun_dag", RERUN), done()],
+            "diagnostics_finalize": [diagnosis("DUPLICATE_LOAD")],
+            "remediation_finalize": [propose("rerun_dag", RERUN)],
             "reporter": [POSTMORTEM],
         },
         tools,
     )
     # the direct call was refused; only the proposal, via execute_action, ran it
     assert names(tools).count("rerun_dag") == 1
-    refusal = fake.asked["remediation"][1][-1].content
+    refusal = fake.asked["diagnostics"][1][-1].content
     assert "propose it as your action instead" in refusal
     assert state["status"] == "resolved"
+
+
+OUTAGE = {"dag_id": "ingest_weather", "conf": {"month": "2026-06"}}
+
+
+def test_outage_waits_for_the_api_then_reruns_without_the_model(tools):
+    tools["behaviour"]["health"] = [False, True]
+    state, interrupts, fake = run(
+        {
+            "diagnostics": [done()],
+            "diagnostics_finalize": [diagnosis("UPSTREAM_API_OUTAGE")],
+            "reporter": [POSTMORTEM],
+        },
+        tools,
+    )
+    checks = [c for c in tools["calls"] if c[0] == "check_api_health"]
+    assert [c[1] for c in checks] == [{"month": "2026-06", "wait_until_healthy_s": 300}] * 2
+    assert [c for c in tools["calls"] if c[0] == "rerun_dag"][0][1] == OUTAGE
+    assert state["status"] == "resolved" and interrupts == []  # tier 1: no approval
+    assert "remediation" not in fake.asked and "remediation_finalize" not in fake.asked
+
+
+def test_outage_escalates_after_three_waits(tools):
+    tools["behaviour"]["health"] = [False, False, False, True]  # the 4th is never asked
+    state, _, fake = run(
+        {
+            "diagnostics": [done()],
+            "diagnostics_finalize": [diagnosis("UPSTREAM_API_OUTAGE")],
+            "reporter": [POSTMORTEM],
+        },
+        tools,
+    )
+    assert names(tools).count("check_api_health") == 3
+    assert "rerun_dag" not in names(tools)
+    assert state["status"] == "escalated"
+    assert state["escalation"]["by"] == "remediation"
+    assert "still down (503) after 3 health checks" in state["escalation"]["reason"]
+    assert "remediation_finalize" not in fake.asked
+
+
+def test_policy_overrides_a_model_that_escalates_a_fixable_root_cause(tools):
+    tools["behaviour"]["health"] = [True]
+    state, _, _ = run(
+        {
+            "diagnostics": [done()],
+            "diagnostics_finalize": [diagnosis("UPSTREAM_API_OUTAGE", rec="escalate")],
+            "reporter": [POSTMORTEM],
+        },
+        tools,
+    )
+    assert state["diagnosis"]["recommendation"] == "fix"
+    assert state["status"] == "resolved"
+    assert 4 not in [r["rule"] for r in state["routing"]]
+
+
+def test_policy_escalates_a_human_root_cause_the_model_wanted_to_fix(tools):
+    state, _, _ = run(
+        {
+            "diagnostics": [done()],
+            "diagnostics_finalize": [diagnosis("CREDENTIALS", rec="fix")],
+            "reporter": [POSTMORTEM],
+        },
+        tools,
+    )
+    assert state["diagnosis"]["recommendation"] == "escalate"
+    assert state["status"] == "escalated" and state["actions_done"] == []
+    assert state["routing"][-1]["rule"] == 4
 
 
 def test_remediation_skips_the_tool_turn_outside_api_outages(tools):

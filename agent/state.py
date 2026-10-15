@@ -29,6 +29,17 @@ class RootCause(StrEnum):
     CREDENTIALS = "CREDENTIALS"
 
 
+# Root causes only people outside this system can fix (the upstream provider, whoever owns
+# secrets). This is policy, so code decides it: the model's own `recommendation` is replaced.
+HUMAN_ROOT_CAUSES = frozenset(
+    {RootCause.MISSING_SOURCE, RootCause.INCOMPLETE_API_PAYLOAD, RootCause.CREDENTIALS}
+)
+
+
+def recommendation_for(root_cause: str) -> Literal["fix", "escalate"]:
+    return "escalate" if root_cause in HUMAN_ROOT_CAUSES else "fix"
+
+
 class Diagnosis(BaseModel):
     root_cause: RootCause
     confidence: float = Field(ge=0, le=1)

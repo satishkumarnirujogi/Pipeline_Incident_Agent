@@ -73,6 +73,16 @@ def wrap(name: str, result: ToolResult) -> str:
     return f'<tool_output tool="{name}">\n{body}\n</tool_output>'
 
 
+def unwrap(content: str) -> dict:
+    """The ToolResult dict inside wrap()'s output ({} if it was truncated or is not JSON)."""
+    body = content.split("\n", 1)[-1].rsplit("\n", 1)[0]
+    try:
+        result = json.loads(body)
+    except ValueError:
+        return {}
+    return result if isinstance(result, dict) else {}
+
+
 def execute_tool_calls(
     state: Mapping[str, Any], agent: str, message: AIMessage, remaining: int, allowed: list[str]
 ) -> tuple[list[ToolMessage], list[dict]]:

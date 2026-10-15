@@ -5,7 +5,7 @@ month: 2026-06
 params:
   op: null_share
   column: passenger_count
-  share: 0.6
+  share: 0.5
 trigger:
   dag_id: ingest_taxi_trips
   conf:
@@ -43,4 +43,4 @@ expected:
   - upsert_column_mapping
   max_reruns: 2
 split: dev
-description: passenger_count set to null in 60% of rows in 2026-06.
+description: passenger_count set to null in 50% of rows in 2026-06.

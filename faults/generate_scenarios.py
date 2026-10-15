@@ -8,14 +8,18 @@ on day 4: never tune prompts on it.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 import yaml
 
-from faults.scenario import SCENARIO_DIR, Scenario
+from faults.scenario import MAX_QUARANTINE_SHARE, SCENARIO_DIR, Scenario
 
 M1, M2, M3 = "2026-06", "2026-07", "2026-08"
 TRIPS, WEATHER, DBT = "ingest_taxi_trips", "ingest_weather", "transform_dbt"
+PROFILE = Path(__file__).parent.parent / "docs" / "data_profile.json"  # from `make profile`
+QUARANTINE_MARGIN = 0.05  # headroom under MAX_QUARANTINE_SHARE for the random null mask
 TEST_VARIANTS = {"F01": {6, 7}, "F02": {6, 7}, "F04": {6, 7}, "F06": {6, 7}}  # others: last only
 
 
@@ -51,6 +55,27 @@ def quarantine(month: str, column: str, op: str, value: Any = None) -> dict:
         # the exact threshold may differ (lt 0 vs lt -100): same fix
         "match": ["table", "month", "predicate.column", "predicate.op"],
     }
+
+
+def baseline_null_rate(month: str, column: str) -> float:
+    """Share of rows already null in the clean sample (docs/data_profile.json)."""
+    trips = json.loads(PROFILE.read_text(encoding="utf-8"))["trips"]
+    return next(t for t in trips if t["month"] == month)["null_rate"][column]
+
+
+def null_share_after(month: str, column: str, share: float) -> float:
+    """Share of the month that is null after nulling `share` of rows at random, and so the
+    share an `is_null` quarantine takes out: rows already null count too."""
+    return 1 - (1 - share) * (1 - baseline_null_rate(month, column))
+
+
+def check_null_spike(month: str, column: str, share: float) -> None:
+    after = null_share_after(month, column, share)
+    if after > MAX_QUARANTINE_SHARE - QUARANTINE_MARGIN:
+        raise ValueError(
+            f"null spike {column} {share:.0%} in {month} leaves {after:.1%} of rows null; the "
+            f"fix would quarantine more than {MAX_QUARANTINE_SHARE - QUARANTINE_MARGIN:.0%}"
+        )
 
 
 def scenarios() -> list[dict]:
@@ -209,12 +234,13 @@ def scenarios() -> list[dict]:
         (M1, "passenger_count", 0.40),
         (M2, "passenger_count", 0.30),
         (M3, "passenger_count", 0.50),
-        (M1, "passenger_count", 0.60),
+        (M1, "passenger_count", 0.50),  # 63% null with June's own 26%
         (M2, "payment_type", 0.10),
         (M3, "trip_distance", 0.05),
         (M1, "fare_amount", 0.08),
     ]
     for v, (month, col, share) in enumerate(nulls, 1):
+        check_null_spike(month, col, share)
         add(
             "F04",
             v,

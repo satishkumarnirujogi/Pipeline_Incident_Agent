@@ -37,6 +37,35 @@ def test_escalations_have_no_required_actions():
             assert s.expected.required_actions, s.id
 
 
+def test_null_share_after_counts_rows_already_null():
+    from faults.generate_scenarios import baseline_null_rate, null_share_after
+
+    base = baseline_null_rate("2026-06", "passenger_count")  # ~26% in the clean sample
+    assert 0.2 < base < 0.3
+    assert null_share_after("2026-06", "passenger_count", 0.6) == pytest.approx(
+        1 - 0.4 * (1 - base)
+    )
+    assert null_share_after("2026-07", "payment_type", 0.1) == pytest.approx(0.1)
+
+
+def test_null_spike_whose_fix_would_lose_too_much_data_is_refused():
+    from faults.generate_scenarios import check_null_spike
+
+    with pytest.raises(ValueError, match="quarantine more than"):
+        check_null_spike("2026-06", "passenger_count", 0.6)  # the old F04-v4: 70.6%
+    check_null_spike("2026-06", "passenger_count", 0.5)  # 63%
+
+
+def test_every_null_spike_fix_stays_under_the_quarantine_cap():
+    from faults.generate_scenarios import null_share_after
+    from faults.scenario import MAX_QUARANTINE_SHARE
+
+    for sc in SCENARIOS:
+        if sc.fault == "null_spike":
+            after = null_share_after(sc.month, sc.params["column"], sc.params["share"])
+            assert after < MAX_QUARANTINE_SHARE, sc.id
+
+
 def test_trigger_month_matches_scenario_month():
     for s in SCENARIOS:
         assert s.trigger.conf["month"] == s.month
