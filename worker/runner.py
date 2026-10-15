@@ -23,13 +23,15 @@ from pydantic import ValidationError
 from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session
 
+from agent import chaos
 from agent.db import agent_engine
 from agent.graph import compile_graph, run_config
-from agent.models import Approval, Incident
+from agent.models import Approval, Escalation, Incident
 from agent.tools.registry import args_hash, validate_args
 
 log = logging.getLogger("worker")
 APPROVAL_TIMEOUT = timedelta(hours=24)
+MAX_RUN_ATTEMPTS = 3  # the first run + 2 recoveries after a crash
 
 _graph: Any = None
 _pool: Any = None
@@ -137,6 +139,35 @@ def _after_invoke(incident_id: str, state: dict) -> str:
     return status
 
 
+def _agent_failed(incident_id: str, exc: BaseException) -> str:
+    """Every retry layer is exhausted: tell a human (escalation row) and stop. The last
+    checkpoint stays, so the incident can be resumed by hand once the cause is fixed."""
+    reason = f"agent run failed: {type(exc).__name__}: {exc}"[:1000]
+    log.error(json.dumps({"event": "agent_failed", "incident_id": incident_id, "error": reason}))
+    with Session(agent_engine()) as s:
+        s.add(
+            Escalation(
+                incident_id=incident_id,
+                summary=f"The incident agent could not finish incident {incident_id}.",
+                reason=reason,
+                suggested_owner="data-platform",
+            )
+        )
+        s.commit()
+    _set_incident(incident_id, status="failed", resolved_at=datetime.now(UTC))
+    return "failed"
+
+
+def _count_attempt(incident_id: str) -> int:
+    with agent_engine().begin() as conn:
+        return conn.execute(
+            update(Incident)
+            .where(Incident.id == uuid.UUID(incident_id))
+            .values(run_attempts=Incident.run_attempts + 1)
+            .returning(Incident.run_attempts)
+        ).scalar_one()
+
+
 def run_incident(incident_id: str) -> str:
     with incident_lock(incident_id) as locked:
         if not locked:
@@ -146,20 +177,55 @@ def run_incident(incident_id: str) -> str:
         snapshot = g.get_state(config)
         if snapshot.interrupts:
             return "awaiting_approval"  # nothing to do until a human decides
-        if snapshot.next:
-            # A previous worker died mid-run: continue from the last checkpoint.
-            log.info(
+        if snapshot.values and not snapshot.next:
+            return snapshot.values.get("status", "unknown")  # already finished
+
+        attempt = _count_attempt(incident_id)
+        if attempt > MAX_RUN_ATTEMPTS:
+            log.error(
                 json.dumps(
-                    {"event": "recovering", "incident_id": incident_id, "next": list(snapshot.next)}
+                    {"event": "gave_up", "incident_id": incident_id, "attempts": attempt - 1}
                 )
             )
-            state = g.invoke(None, config)
-        elif snapshot.values:
-            return snapshot.values.get("status", "unknown")  # already finished
-        else:
-            _set_incident(incident_id, status="running")
-            state = g.invoke({"incident_id": incident_id}, config)
+            _set_incident(incident_id, status="failed", resolved_at=datetime.now(UTC))
+            return "failed"
+        chaos.set_incident(incident_id)
+        try:
+            if snapshot.next:
+                # A previous worker died mid-run: continue from the last checkpoint.
+                log.info(
+                    json.dumps(
+                        {
+                            "event": "recovering",
+                            "incident_id": incident_id,
+                            "next": list(snapshot.next),
+                            "attempt": attempt,
+                        }
+                    )
+                )
+                state = g.invoke(None, config)
+            else:
+                _set_incident(incident_id, status="running")
+                state = g.invoke({"incident_id": incident_id}, config)
+        except Exception as exc:  # noqa: BLE001 - retries inside the graph are exhausted
+            return _agent_failed(incident_id, exc)
+        finally:
+            chaos.set_incident(None)
         return _after_invoke(incident_id, state)
+
+
+def recover_orphans() -> list[str]:
+    """Incidents a dead worker left behind (received or running, no pending approval).
+    Called when a worker starts, so recovery does not wait for the broker's visibility
+    timeout. Re-enqueueing is safe: the lock and the checkpoint make a duplicate a no-op."""
+    with Session(agent_engine()) as s:
+        ids = [
+            str(i)
+            for i in s.execute(
+                select(Incident.id).where(Incident.status.in_(("received", "running")))
+            ).scalars()
+        ]
+    return ids
 
 
 def resume_incident(incident_id: str, approval_id: str) -> str:
@@ -178,13 +244,19 @@ def resume_incident(incident_id: str, approval_id: str) -> str:
             }
         g, config = graph(), run_config(incident_id)
         snapshot = g.get_state(config)
-        _set_incident(incident_id, status="running")
-        if snapshot.interrupts:
-            state = g.invoke(Command(resume=decision), config)
-        elif snapshot.next:
-            state = g.invoke(None, config)  # resumed before, then crashed: continue
-        else:
+        if not snapshot.interrupts and not snapshot.next:
             return snapshot.values.get("status", "unknown")
+        _set_incident(incident_id, status="running")
+        chaos.set_incident(incident_id)
+        try:
+            if snapshot.interrupts:
+                state = g.invoke(Command(resume=decision), config)
+            else:
+                state = g.invoke(None, config)  # resumed before, then crashed: continue
+        except Exception as exc:  # noqa: BLE001
+            return _agent_failed(incident_id, exc)
+        finally:
+            chaos.set_incident(None)
         return _after_invoke(incident_id, state)
 
 

@@ -130,6 +130,9 @@ services:
     command: celery -A worker.celery_app:celery_app worker -B --schedule /tmp/celerybeat-schedule --concurrency=1 --pool=solo --loglevel=INFO
     environment:
       FASTEMBED_CACHE_PATH: /opt/models
+      # evaluation only: CHAOS_MODE=on [CHAOS_CONFIG=eval/chaos_demo.yaml] docker compose up -d worker
+      CHAOS_MODE: ${CHAOS_MODE:-off}
+      CHAOS_CONFIG: ${CHAOS_CONFIG:-}
     volumes:
       # tier-0 tools read landing files and contracts; agents never write files
       - ./data:/app/data:ro

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import logging
 
+from celery.signals import worker_ready
+
 from worker import runner
 from worker.celery_app import celery_app
 
@@ -36,3 +38,13 @@ def expire_stale_approvals() -> int:
     for incident_id, approval_id in expired:
         resume_incident.delay(incident_id, approval_id)
     return len(expired)
+
+
+@worker_ready.connect
+def requeue_orphans(**_: object) -> None:
+    """A worker that starts after a crash picks up what the dead one left running."""
+    orphans = runner.recover_orphans()
+    for incident_id in orphans:
+        run_incident.delay(incident_id)
+    if orphans:
+        log.info("re-enqueued %d orphaned incident(s): %s", len(orphans), orphans)

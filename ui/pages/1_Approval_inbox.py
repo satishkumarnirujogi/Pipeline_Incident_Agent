@@ -31,8 +31,10 @@ def card(a: dict) -> None:
             st.markdown("**Rollback**")
             st.write(a.get("rollback") or "—")
         with right:
-            st.markdown(f"**Diagnosis:** `{diagnosis.get('root_cause')}` "
-                        f"(confidence {diagnosis.get('confidence')})")
+            st.markdown(
+                f"**Diagnosis:** `{diagnosis.get('root_cause')}` "
+                f"(confidence {diagnosis.get('confidence')})"
+            )
             for item in diagnosis.get("evidence", []):
                 st.markdown(f"- {item}")
             st.markdown("**Dry-run preview**")
@@ -44,8 +46,12 @@ def card(a: dict) -> None:
         if approve_col.button("Approve", key=f"approve-{a['id']}", type="primary"):
             _submit(a["id"], "approve")
         with edit_col.popover("Edit"):
-            edited = st.text_area("Arguments (JSON)", json.dumps(a["args"], indent=2),
-                                  key=f"args-{a['id']}", height=200)
+            edited = st.text_area(
+                "Arguments (JSON)",
+                json.dumps(a["args"], indent=2),
+                key=f"args-{a['id']}",
+                height=200,
+            )
             if st.button("Approve edited", key=f"edit-{a['id']}"):
                 try:
                     _submit(a["id"], "edit", args=json.loads(edited))
@@ -57,8 +63,9 @@ def card(a: dict) -> None:
                 _submit(a["id"], "reject", comment=comment)
 
 
-def _submit(approval_id: str, decision: str, args: dict | None = None,
-            comment: str | None = None) -> None:
+def _submit(
+    approval_id: str, decision: str, args: dict | None = None, comment: str | None = None
+) -> None:
     try:
         api.decide(approval_id, decision, args=args, comment=comment)
     except api.ApiError as exc:

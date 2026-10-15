@@ -33,6 +33,7 @@ def fake_tools():
     names = []
 
     def add(name, tier, fn, timeout_s=5, **kw):
+        REGISTRY.pop(name, None)  # a monkeypatch undo may have put an old copy back
         fn.__name__ = name
         tool_spec(tier=tier, input_model=EchoIn, agents={"remediation"}, timeout_s=timeout_s, **kw)(
             fn
@@ -195,7 +196,7 @@ def test_chaos_failure_is_marked(ctx, monkeypatch):
     from agent import chaos
     from agent.tools.errors import ToolTimeout
 
-    def fail(tool):
+    def fail(tool, incident_id=None):
         raise ToolTimeout(f"{tool}: timed out (chaos)")
 
     monkeypatch.setattr(chaos, "before_tool", fail)

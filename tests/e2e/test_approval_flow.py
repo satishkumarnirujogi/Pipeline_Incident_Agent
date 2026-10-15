@@ -59,8 +59,9 @@ def fail_pipeline(af: AirflowClient, scenario_id: str) -> tuple:
     injector.revert(sc)
     assert clean_chain(af, sc.month)
     injector.apply(sc)
-    run_id = af.trigger("ingest_taxi_trips", {"month": sc.month})
-    af.wait_for_run("ingest_taxi_trips", run_id)  # fails for ingest faults, succeeds for dbt ones
+    dag_id = sc.trigger.dag_id  # e.g. F05 is caught by running transform_dbt directly
+    run_id = af.trigger(dag_id, {"month": sc.month})
+    af.wait_for_run(dag_id, run_id)  # an ingest run succeeds for dbt-stage faults
     incident = wait_for(
         lambda: incident_for(run_id) or _transform_incident(af, run_id),
         240,

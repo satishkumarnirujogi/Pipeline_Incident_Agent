@@ -27,7 +27,10 @@ TOOL_ROOT_CAUSES = {"UPSTREAM_API_OUTAGE"}
 def _history(state: IncidentState) -> dict:
     return {
         "incident": common.incident_brief(state),
-        "diagnosis": state.get("diagnosis"),
+        # missing_information is for a second diagnosis attempt, not for remediation
+        "diagnosis": {
+            k: v for k, v in (state.get("diagnosis") or {}).items() if k != "missing_information"
+        },
         "actions_done": [
             {k: a.get(k) for k in ("tool", "args", "ok", "message", "verification")}
             for a in state.get("actions_done", [])

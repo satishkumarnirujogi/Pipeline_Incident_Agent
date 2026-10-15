@@ -29,6 +29,13 @@ from typing import Any
 
 from pydantic import BaseModel
 from pydantic_core import to_jsonable_python
+from tenacity import (
+    RetryCallState,
+    Retrying,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential_jitter,
+)
 
 from agent import chaos
 from agent.tools.errors import (
@@ -45,6 +52,8 @@ TIER_REVERSIBLE = 1
 TIER_CHANGES_DATA = 2
 TIER_ESCALATION = -1  # always allowed; ends the run as escalated
 MAX_TIER1_PER_INCIDENT = 2
+TOOL_ATTEMPTS = 3
+RETRY_WAIT = wait_exponential_jitter(initial=1, max=20, jitter=1)  # tests set wait_none()
 
 AGENTS = frozenset({"diagnostics", "remediation", "reporter"})
 
@@ -79,7 +88,6 @@ class ToolContext:
     # Which remediation proposal this call executes. Part of the idempotency key, so a
     # crash-and-redo of the same step is a no-op but a deliberate second rerun is not.
     step: int = 0
-    attempt: int = 1
     month: str | None = None  # the incident's month, for previews
     store: ToolStore = field(default_factory=PostgresToolStore)
 
@@ -180,6 +188,7 @@ def call_tool(name: str, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     violation = False
     chaos_hit = False
     replayed = False
+    attempts = 1
     key: str | None = None
 
     try:
@@ -207,23 +216,59 @@ def call_tool(name: str, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
                 message="already done; returning the stored result",
             )
         else:
-            result = _execute(spec, parsed, ctx, key)
-            chaos_hit = result.message.endswith("(chaos)")
+
+            def failed_attempt(n: int, res: ToolResult, chaos_flag: bool) -> None:
+                _record(
+                    ctx,
+                    name,
+                    tier,
+                    hashed,
+                    res,
+                    int((time.monotonic() - started) * 1000),
+                    False,
+                    chaos_flag,
+                    False,
+                    attempt=n,
+                )
+
+            result, attempts, chaos_hit = _execute(spec, parsed, ctx, key, failed_attempt)
     except Exception as exc:  # noqa: BLE001 - envelope boundary
         error_type, retryable, message = classify(exc)
         result = ToolResult(ok=False, error_type=error_type, retryable=retryable, message=message)
 
     latency_ms = int((time.monotonic() - started) * 1000)
-    _record(ctx, name, tier, hashed, result, latency_ms, violation, chaos_hit, replayed)
+    _record(
+        ctx,
+        name,
+        tier,
+        hashed,
+        result,
+        latency_ms,
+        violation,
+        chaos_hit,
+        replayed,
+        attempt=attempts,
+    )
     return result
 
 
-def _execute(spec: ToolSpec, parsed: BaseModel, ctx: ToolContext, key: str | None) -> ToolResult:
-    """Rate limit, action record, chaos hook, timeout, then the tool itself.
+def _execute(
+    spec: ToolSpec,
+    parsed: BaseModel,
+    ctx: ToolContext,
+    key: str | None,
+    on_failed_attempt: Callable[[int, ToolResult, bool], None],
+) -> tuple[ToolResult, int, bool]:
+    """Rate limit, action record, then the tool with retries, chaos hook and timeout.
 
-    A chaos failure is marked by a message ending in "(chaos)"; the caller logs it.
+    Retry layer 2: a retryable error (timeout, 429, 5xx, lost DB connection) is retried
+    with exponential backoff and jitter, at most TOOL_ATTEMPTS times, but only for tools
+    that are safe to repeat (tier 0 reads, idempotent actions). Each failed attempt is
+    reported through on_failed_attempt so it gets its own tool_calls row.
+    Returns (result, attempts, chaos_hit_on_last_attempt).
     """
     started = False
+    attempts, chaos_hit = 0, False
     try:
         if key:
             if spec.tier == TIER_REVERSIBLE and (
@@ -245,18 +290,42 @@ def _execute(spec: ToolSpec, parsed: BaseModel, ctx: ToolContext, key: str | Non
                 }
             )
             started = True
-        chaos.before_tool(spec.name)
-        data = to_jsonable_python(
-            _run_with_timeout(lambda: spec.fn(parsed, ctx), spec.timeout_s, spec.name)
+
+        retry_safe = spec.tier == TIER_READONLY or spec.idempotent
+
+        def before_sleep(state: RetryCallState) -> None:
+            exc = state.outcome.exception() if state.outcome else None
+            error_type, retryable, message = classify(exc) if exc else ("unknown", False, "")
+            on_failed_attempt(
+                state.attempt_number,
+                ToolResult(ok=False, error_type=error_type, retryable=retryable, message=message),
+                message.endswith("(chaos)"),
+            )
+
+        retrying = Retrying(
+            stop=stop_after_attempt(TOOL_ATTEMPTS if retry_safe else 1),
+            wait=RETRY_WAIT,
+            retry=retry_if_exception(lambda e: classify(e)[1]),
+            before_sleep=before_sleep,
+            reraise=True,
         )
+        for attempt in retrying:
+            with attempt:
+                attempts = attempt.retry_state.attempt_number
+                chaos.before_tool(spec.name, ctx.incident_id)
+                data = to_jsonable_python(
+                    _run_with_timeout(lambda: spec.fn(parsed, ctx), spec.timeout_s, spec.name)
+                )
         if started and key:
             ctx.store.finish_action(key, "succeeded", data)
-        return ToolResult(ok=True, data=data)
+        return ToolResult(ok=True, data=data), attempts, False
     except Exception as exc:  # noqa: BLE001 - envelope boundary
         error_type, retryable, message = classify(exc)
+        chaos_hit = message.endswith("(chaos)")
         if started and key:
             ctx.store.finish_action(key, "failed", {"error_type": error_type, "message": message})
-        return ToolResult(ok=False, error_type=error_type, retryable=retryable, message=message)
+        result = ToolResult(ok=False, error_type=error_type, retryable=retryable, message=message)
+        return result, max(attempts, 1), chaos_hit
 
 
 def _record(
@@ -269,6 +338,7 @@ def _record(
     violation: bool,
     chaos_hit: bool,
     replayed: bool,
+    attempt: int = 1,
 ) -> None:
     try:
         ctx.store.record_call(
@@ -281,7 +351,7 @@ def _record(
                 "ok": result.ok,
                 "error_type": result.error_type,
                 "retryable": result.retryable,
-                "attempt": ctx.attempt,
+                "attempt": attempt,
                 "latency_ms": latency_ms,
                 "replayed": replayed,
                 "safety_violation": violation,

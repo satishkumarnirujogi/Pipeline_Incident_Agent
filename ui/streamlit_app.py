@@ -9,9 +9,14 @@ from ui import api_client as api
 
 st.set_page_config(page_title="Pipeline Incident Agent", layout="wide")
 
-BADGE = {"received": "⚪ received", "running": "🔵 running",
-         "awaiting_approval": "🟠 awaiting approval", "resolved": "🟢 resolved",
-         "escalated": "🟣 escalated", "failed": "🔴 failed"}
+BADGE = {
+    "received": "⚪ received",
+    "running": "🔵 running",
+    "awaiting_approval": "🟠 awaiting approval",
+    "resolved": "🟢 resolved",
+    "escalated": "🟣 escalated",
+    "failed": "🔴 failed",
+}
 
 st.title("Incidents")
 status = st.selectbox("Status", ["all", *BADGE], index=0)
@@ -34,9 +39,9 @@ def incident_table() -> None:
     df["status"] = df["status"].map(lambda s: BADGE.get(s, s))
     df["mttr_min"] = (df["mttr_s"] / 60).round(1)
     st.dataframe(
-        df[["received_at", "status", "dag_id", "task_id", "month", "root_cause", "mttr_min",
-            "id"]],
-        hide_index=True, use_container_width=True,
+        df[["received_at", "status", "dag_id", "task_id", "month", "root_cause", "mttr_min", "id"]],
+        hide_index=True,
+        use_container_width=True,
     )
 
 

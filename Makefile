@@ -1,4 +1,4 @@
-.PHONY: e2e up up-pipeline down reset reset-data migrate ps logs stats seed profile bootstrap backfill scenarios verify-faults eval test lint fmt check-llm
+.PHONY: chaos-on chaos-off e2e up up-pipeline down reset reset-data migrate ps logs stats seed profile bootstrap backfill scenarios verify-faults eval test lint fmt check-llm
 
 COMPOSE := docker compose
 
@@ -52,6 +52,12 @@ eval:          ## Phase 9
 
 test:
 	uv run pytest tests/unit tests/integration
+
+chaos-on:      ## worker with chaos injection (eval only); CHAOS_CONFIG=eval/chaos_demo.yaml for a demo
+	CHAOS_MODE=on CHAOS_CONFIG=$(CHAOS_CONFIG) $(COMPOSE) up -d worker
+
+chaos-off:
+	$(COMPOSE) up -d --force-recreate worker
 
 e2e:           ## against the running stack (make up-pipeline + make bootstrap first)
 	uv run pytest tests/e2e -m e2e -v

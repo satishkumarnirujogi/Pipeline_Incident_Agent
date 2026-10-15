@@ -9,6 +9,7 @@ llm_calls table arrive in Phase 8.
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -21,9 +22,35 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, SecretStr, ValidationError
 
+from agent import chaos
 from agent.settings import get_settings
 
 log = logging.getLogger(__name__)
+# Hard wall-clock limit per model call. The client's timeout is per read, and OpenRouter
+# keeps slow requests alive, so without this one runaway generation can hang a run.
+CALL_TIMEOUT_S = 90
+MAX_OUTPUT_TOKENS = 4000
+_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="llm")
+
+
+class LLMTimeout(Exception):  # noqa: N818
+    """A model call exceeded CALL_TIMEOUT_S."""
+
+
+class LLMUnavailable(Exception):  # noqa: N818
+    """Primary and fallback both failed. A plain Exception on purpose: LangGraph's node
+    retry policy retries it (it does not retry RuntimeError)."""
+
+
+def _bounded(fn: Any, *args: Any) -> Any:
+    future = _executor.submit(fn, *args)
+    try:
+        return future.result(timeout=CALL_TIMEOUT_S)
+    except concurrent.futures.TimeoutError:
+        future.cancel()
+        raise LLMTimeout(f"no answer within {CALL_TIMEOUT_S}s") from None
+
+
 PRICING = Path(__file__).parents[1] / "config" / "pricing.yaml"
 
 
@@ -37,6 +64,7 @@ class CallRecord:
     ok: bool
     fallback_used: bool
     error_type: str | None = None
+    chaos_injected: bool = False
 
     def as_dict(self) -> dict:
         return self.__dict__.copy()
@@ -79,6 +107,7 @@ def _chat_model(model: str, temperature: float = 0.0) -> BaseChatModel:
         temperature=temperature,
         timeout=30,
         max_retries=2,
+        max_completion_tokens=MAX_OUTPUT_TOKENS,
         default_headers={"X-Title": "pipeline-incident-agent"},
     )
 
@@ -95,7 +124,13 @@ class LLM:
         self.fallback = fallback or _chat_model(s.fallback_model)
 
     def _record(
-        self, node: str, model: str, msg: AIMessage | None, fallback: bool, error: str | None = None
+        self,
+        node: str,
+        model: str,
+        msg: AIMessage | None,
+        fallback: bool,
+        error: str | None = None,
+        chaos_hit: bool = False,
     ) -> CallRecord:
         usage: dict[str, Any] = dict((msg.usage_metadata if msg is not None else None) or {})
         tin, tout = usage.get("input_tokens", 0), usage.get("output_tokens", 0)
@@ -108,7 +143,19 @@ class LLM:
             ok=error is None,
             fallback_used=fallback,
             error_type=error,
+            chaos_injected=chaos_hit,
         )
+
+    def _failed(self, node: str, name: str, fallback: bool, exc: Exception) -> CallRecord:
+        log.warning("%s: %s failed: %s", node, name, exc)
+        error = (
+            "rate_limit"
+            if isinstance(exc, chaos.ChaosRateLimit)
+            else "timeout"
+            if isinstance(exc, LLMTimeout)
+            else type(exc).__name__
+        )
+        return self._record(node, name, None, fallback, error, "(chaos)" in str(exc))
 
     def with_tools(self, node: str, messages: list[BaseMessage], tools: list[dict]) -> LLMResult:
         """One tool-calling turn. Falls back to the other provider on any error."""
@@ -118,14 +165,15 @@ class LLM:
             (self.fallback, self.fallback_name, True),
         ):
             try:
-                msg = model.bind_tools(tools).invoke(messages)
+                if not fallback:
+                    chaos.before_primary_llm(node)
+                msg = _bounded(model.bind_tools(tools).invoke, messages)
                 result.calls.append(self._record(node, name, msg, fallback))
                 result.message = msg
                 return result
             except Exception as exc:  # noqa: BLE001 - provider error -> try the fallback
-                log.warning("%s: %s failed: %s", node, name, exc)
-                result.calls.append(self._record(node, name, None, fallback, type(exc).__name__))
-        raise RuntimeError(f"{node}: primary and fallback models both failed")
+                result.calls.append(self._failed(node, name, fallback, exc))
+        raise LLMUnavailable(f"{node}: primary and fallback models both failed")
 
     def structured(
         self, node: str, messages: list[BaseMessage], schema: type[BaseModel]
@@ -140,14 +188,14 @@ class LLM:
             attempt_msgs = list(messages)
             for _repair in range(2):
                 try:
-                    out: Any = model.with_structured_output(
+                    if not fallback:
+                        chaos.before_primary_llm(node)
+                    runnable = model.with_structured_output(
                         schema, method="function_calling", include_raw=True
-                    ).invoke(attempt_msgs)
-                except Exception as exc:  # noqa: BLE001
-                    log.warning("%s: %s failed: %s", node, name, exc)
-                    result.calls.append(
-                        self._record(node, name, None, fallback, type(exc).__name__)
                     )
+                    out: Any = _bounded(runnable.invoke, attempt_msgs)
+                except Exception as exc:  # noqa: BLE001
+                    result.calls.append(self._failed(node, name, fallback, exc))
                     break  # provider error: go to the fallback model
                 raw: AIMessage = out["raw"]
                 if out.get("parsed") is not None:
@@ -166,7 +214,7 @@ class LLM:
                         f"Return the {schema.__name__} again, corrected."
                     ),
                 ]
-        raise RuntimeError(f"{node}: no valid {schema.__name__} from either model")
+        raise LLMUnavailable(f"{node}: no valid {schema.__name__} from either model")
 
 
 _llm: LLM | None = None

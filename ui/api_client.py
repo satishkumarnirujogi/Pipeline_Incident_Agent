@@ -37,7 +37,11 @@ def approvals(status: str = "pending") -> list[dict]:
     return _call("GET", "/approvals", params={"status": status})
 
 
-def decide(approval_id: str, decision: str, args: dict | None = None,
-           comment: str | None = None) -> dict:
-    return _call("POST", f"/approvals/{approval_id}/decision",
-                 json={"decision": decision, "args": args, "comment": comment})
+def decide(
+    approval_id: str, decision: str, args: dict | None = None, comment: str | None = None
+) -> dict:
+    return _call(
+        "POST",
+        f"/approvals/{approval_id}/decision",
+        json={"decision": decision, "args": args, "comment": comment},
+    )

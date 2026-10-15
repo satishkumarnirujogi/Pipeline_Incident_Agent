@@ -11,7 +11,7 @@ from enum import StrEnum
 from typing import Annotated, Any, Literal, TypedDict
 
 from langgraph.graph.message import add_messages
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class RootCause(StrEnum):
@@ -55,6 +55,15 @@ class RemediationDecision(BaseModel):
     decision: Literal["action", "escalate"]
     action: ProposedAction | None = None
     escalation_reason: str | None = None
+
+    @model_validator(mode="after")
+    def _consistent(self) -> RemediationDecision:
+        # Rejected combinations go back to the model through the structured-output repair.
+        if self.decision == "action" and self.action is None:
+            raise ValueError("decision is action but no action was given")
+        if self.decision == "escalate" and not (self.escalation_reason or "").strip():
+            raise ValueError("decision is escalate but escalation_reason is empty")
+        return self
 
 
 class RouteDecision(BaseModel):

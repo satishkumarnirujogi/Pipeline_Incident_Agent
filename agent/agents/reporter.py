@@ -7,7 +7,7 @@ import json
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from agent.agents import common
-from agent.llm import get_llm
+from agent.llm import LLMUnavailable, get_llm
 from agent.state import IncidentState, Postmortem
 
 
@@ -41,8 +41,14 @@ def reporter_agent(state: IncidentState) -> dict:
             "Incident record:\n\n" + json.dumps(_record(state, status), indent=2, default=str)
         ),
     ]
-    result = get_llm().structured("reporter", messages, Postmortem)
-    pm: Postmortem = result.parsed  # type: ignore[assignment]
+    llm_cost: dict = {}
+    try:
+        result = get_llm().structured("reporter", messages, Postmortem)
+        pm: Postmortem = result.parsed  # type: ignore[assignment]
+        llm_cost = common.llm_update(result)
+    except LLMUnavailable:
+        # The outcome must not depend on prose: write the facts without a model.
+        pm = template_postmortem(state, status)
 
     reporter = common.ctx(state, "reporter")
     common.run_tool("write_postmortem", {"markdown": pm.markdown}, reporter)
@@ -58,9 +64,41 @@ def reporter_agent(state: IncidentState) -> dict:
             reporter,
         )
     common.log_event(state, "final", status=status, cost_eur=state.get("cost_eur", 0.0))
-    return {
-        "postmortem": pm.model_dump(),
-        "status": status,
-        "steps": 1,
-        **common.llm_update(result),
-    }
+    return {"postmortem": pm.model_dump(), "status": status, "steps": 1, **llm_cost}
+
+
+def template_postmortem(state: IncidentState, status: str) -> Postmortem:
+    brief = common.incident_brief(state)
+    diagnosis = state.get("diagnosis") or {}
+    actions = state.get("actions_done", [])
+    escalation = state.get("escalation") or {}
+    where = f"{brief['dag_id']}.{brief['task_id']} ({brief['month']})"
+    fix = (
+        "; ".join(f"{a['tool']} {json.dumps(a['args'])}" for a in actions if a.get("ok"))
+        or f"escalated: {escalation.get('reason', 'no fix applied')}"
+    )
+    summary = (
+        f"{where} failed: {brief.get('exception') or 'see log'}. Root cause "
+        f"{diagnosis.get('root_cause', 'unknown')}. Outcome: {status}; {fix}."
+    )[:2000]
+    lines = [
+        f"# Postmortem: {where}",
+        f"Status: **{status}** (written without an LLM: both models were unavailable)",
+        "",
+        "## Summary",
+        summary,
+        "",
+        "## Root cause",
+        f"{diagnosis.get('root_cause')} (confidence {diagnosis.get('confidence')})",
+    ]
+    lines += [f"- {e}" for e in diagnosis.get("evidence", [])]
+    lines += (
+        ["", "## Actions"]
+        + [
+            f"- {a['tool']} {json.dumps(a['args'])}: {'ok' if a.get('ok') else 'failed'}, "
+            f"{a.get('approved', '')}"
+            for a in actions
+        ]
+        + ["", "## Cost", f"EUR {state.get('cost_eur', 0):.4f}, {state.get('steps', 0)} steps"]
+    )
+    return Postmortem(summary=summary, markdown="\n".join(lines), fix=fix[:1000])

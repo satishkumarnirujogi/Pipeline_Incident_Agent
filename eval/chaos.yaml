@@ -1,0 +1,5 @@
+# Chaos rates for evaluation runs (CHAOS_MODE=on). See agent/chaos.py.
+tool_failure_rate: 0.2
+llm_failure_rate: 0.1
+primary_down_scenarios: 0.25
+worker_kill_scenarios: 0.15

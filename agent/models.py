@@ -54,6 +54,8 @@ class Incident(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     scenario_id: Mapped[str | None] = mapped_column(String(32))
     eval_run_id: Mapped[str | None] = mapped_column(String(64))
+    # Worker runs of this incident (first run + crash recoveries); capped by the runner.
+    run_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
 
 class ToolCall(Base):
@@ -134,6 +136,14 @@ class Postmortem(Base):
 
 class IncidentMemory(Base):
     __tablename__ = "incident_memory"
+    __table_args__ = (
+        Index(
+            "ix_incident_memory_embedding",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     incident_id: Mapped[str] = mapped_column(String(64), unique=True)

@@ -1,0 +1,5 @@
+﻿# Higher rates for a single live demonstration run (make chaos-demo); evaluation uses chaos.yaml.
+tool_failure_rate: 0.3
+llm_failure_rate: 0.4
+primary_down_scenarios: 0.0
+worker_kill_scenarios: 0.0
