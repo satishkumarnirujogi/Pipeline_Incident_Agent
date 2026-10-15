@@ -8,7 +8,8 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_PROJECT_ENVIRONMENT=/opt/venv \
     PATH=/opt/venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \
-    RUNNING_IN_DOCKER=1
+    RUNNING_IN_DOCKER=1 \
+    PYTHONPATH=/app
 
 WORKDIR /app
 COPY pyproject.toml uv.lock ./

@@ -20,7 +20,9 @@ from agent.tools.registry import REGISTRY, TIER_CHANGES_DATA, validate_args
 VERIFY_TIMEOUT_S = 600
 
 
-def approval_gate(state: IncidentState) -> Command[Literal["execute_action", "supervisor"]]:
+def approval_gate(
+    state: IncidentState,
+) -> Command[Literal["execute_action", "supervisor", "escalate"]]:
     action = ProposedAction.model_validate(state["proposed_action"])
     spec = REGISTRY.get(action.tool)
     if spec is None or spec.tier < TIER_CHANGES_DATA:
@@ -51,6 +53,18 @@ def approval_gate(state: IncidentState) -> Command[Literal["execute_action", "su
         approval_id=decision.get("approval_id"),
     )
     choice = decision.get("decision")
+    if choice == "timeout":  # nobody decided within the approval window
+        return Command(
+            goto="escalate",
+            update={
+                "proposed_action": None,
+                "steps": 1,
+                "escalation": {
+                    "reason": decision.get("comment") or "approval timed out",
+                    "by": "approval_timeout",
+                },
+            },
+        )
     if choice in ("approve", "edit"):
         update: dict = {"approval_id": decision["approval_id"], "steps": 1}
         if choice == "edit":

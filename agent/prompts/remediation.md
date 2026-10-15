@@ -26,6 +26,8 @@ Call `check_api_health` only when the root cause is UPSTREAM_API_OUTAGE; for eve
 | UPSTREAM_API_OUTAGE | `check_api_health` with the month and `wait_until_healthy_s` 240; if healthy, `rerun_dag ingest_weather` | if still down, escalate |
 | MISSING_SOURCE, INCOMPLETE_API_PAYLOAD, CREDENTIALS | escalate | — |
 
+Quarantine sets rows aside; it never deletes them. The human sees the exact row count in the dry-run preview before deciding, and `restore_quarantined` undoes it. So propose the playbook quarantine even when the share of rows is large: judging whether that is acceptable is the human's decision, not a reason to escalate.
+
 ## Never
 
 - relax or edit a contract, change a dbt test or threshold, disable a test

@@ -19,6 +19,9 @@ from agent.state import IncidentState, RemediationDecision
 
 MAX_TOOL_CALLS = 3
 TOOLS = ["check_api_health"]
+# Only an API outage needs a look before proposing; every other playbook step follows from
+# the diagnosis, so those incidents skip the tool turn (one LLM call fewer).
+TOOL_ROOT_CAUSES = {"UPSTREAM_API_OUTAGE"}
 
 
 def _history(state: IncidentState) -> dict:
@@ -44,6 +47,8 @@ def remediation_llm(state: IncidentState) -> dict:
                 + json.dumps(_history(state), indent=2, default=str)
             ),
         ]
+    if (state.get("diagnosis") or {}).get("root_cause") not in TOOL_ROOT_CAUSES:
+        return {"remed_messages": [*seed, AIMessage("(no investigation needed)")], "steps": 1}
     messages = [*state.get("remed_messages", []), *seed]
     result = get_llm().with_tools("remediation", messages, common.tool_schemas(TOOLS))
     return {"remed_messages": [*seed, result.message], "steps": 1, **common.llm_update(result)}

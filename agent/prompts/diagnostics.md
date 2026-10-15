@@ -34,6 +34,7 @@ Set `recommendation` to `escalate` for MISSING_SOURCE, INCOMPLETE_API_PAYLOAD an
 - Never guess a category without evidence. If the evidence is thin, lower `confidence` and say in `missing_information` what you would need.
 - Evidence items are short excerpts (one line each, at most 5), quoted from tool output.
 - `failing_component` is `<dag_id>.<task_id>`.
+- For failures before the load (`check_landing_file`, `validate_contract`), `raw` still holds the previous successful load of that month. Compare the landing file with the baseline, not with `raw`. A month that loaded fine before and fails now usually means the landing file changed.
 
 ## Examples (abbreviated)
 

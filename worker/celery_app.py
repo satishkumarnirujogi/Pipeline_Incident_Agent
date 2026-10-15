@@ -17,4 +17,8 @@ celery_app.conf.update(
     result_serializer="json",
     accept_content=["json"],
     timezone="UTC",
+    # Celery beat (embedded in the single worker with -B): escalate stale approvals.
+    beat_schedule={
+        "expire-stale-approvals": {"task": "expire_stale_approvals", "schedule": 900.0},
+    },
 )

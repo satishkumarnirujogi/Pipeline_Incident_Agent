@@ -6,8 +6,6 @@ call is recorded and answered by a fake.
 
 from __future__ import annotations
 
-from collections import defaultdict
-
 import pytest
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
@@ -16,10 +14,10 @@ from langgraph.types import Command
 from agent import llm as llm_module
 from agent.agents import common
 from agent.graph import compile_graph, run_config
-from agent.llm import CallRecord, LLMResult
-from agent.state import Diagnosis, Postmortem, ProposedAction, RemediationDecision, RouteDecision
+from agent.state import RouteDecision
 from agent.tools.registry import ToolResult
 from agent.tools.store import InMemoryToolStore
+from tests.fakes import MAPPING, POSTMORTEM, RERUN, FakeLLM, call, diagnosis, done, propose
 
 INCIDENT = {
     "dag_id": "ingest_taxi_trips",
@@ -29,70 +27,6 @@ INCIDENT = {
     "conf": {"month": "2026-06"},
     "exception": "ContractViolation: missing required columns ['tpep_pickup_datetime']",
 }
-
-
-class FakeLLM:
-    """Answers each node from its own queue; records what it was asked."""
-
-    def __init__(self, script: dict[str, list]):
-        self.script = {k: list(v) for k, v in script.items()}
-        self.asked: dict[str, list] = defaultdict(list)
-
-    def _next(self, node: str, messages: list):
-        self.asked[node].append(messages)
-        if not self.script.get(node):
-            raise AssertionError(f"no scripted answer left for {node}")
-        return self.script[node].pop(0)
-
-    def _result(self, node: str, **kw) -> LLMResult:
-        return LLMResult(calls=[CallRecord(node, "fake", 100, 20, 0.001, True, False)], **kw)
-
-    def with_tools(self, node, messages, tools):
-        answer = self._next(node, messages)
-        return self._result(node, message=answer)
-
-    def structured(self, node, messages, schema):
-        answer = self._next(node, messages)
-        assert isinstance(answer, schema), (node, answer)
-        return self._result(node, parsed=answer, message=AIMessage(""))
-
-
-def call(name, args=None, cid="c1"):
-    return AIMessage("", tool_calls=[{"name": name, "args": args or {}, "id": cid}])
-
-
-def done(text="enough evidence"):
-    return AIMessage(text)
-
-
-def diagnosis(root="SCHEMA_DRIFT", confidence=0.95, rec="fix", missing=None):
-    return Diagnosis(
-        root_cause=root,
-        confidence=confidence,
-        evidence=["log: missing column"],
-        failing_component="ingest_taxi_trips.validate_contract",
-        recommendation=rec,
-        missing_information=missing,
-    )
-
-
-def propose(tool, args):
-    return RemediationDecision(
-        decision="action",
-        action=ProposedAction(tool=tool, args=args, rationale="because", rollback="undo"),
-    )
-
-
-MAPPING = {
-    "dataset": "yellow_trips",
-    "source_col": "pickup_datetime",
-    "target_col": "tpep_pickup_datetime",
-    "transform": "none",
-}
-RERUN = {"dag_id": "ingest_taxi_trips", "conf": {"month": "2026-06"}}
-POSTMORTEM = Postmortem(
-    summary="Schema drift fixed by a mapping.", markdown="# Postmortem\n...", fix="mapping + rerun"
-)
 
 
 @pytest.fixture
@@ -364,12 +298,13 @@ def test_edit_with_invalid_args_counts_as_rejection(tools):
 
 
 def test_remediation_cannot_call_actions_directly(tools):
+    weather = {"dag_id": "ingest_weather", "conf": {"month": "2026-06"}}
     state, _, fake = run(
         {
             "diagnostics": [done()],
-            "diagnostics_finalize": [diagnosis("DUPLICATE_LOAD")],
-            "remediation": [call("rerun_dag", RERUN), done()],
-            "remediation_finalize": [propose("rerun_dag", RERUN)],
+            "diagnostics_finalize": [diagnosis("UPSTREAM_API_OUTAGE")],
+            "remediation": [call("rerun_dag", weather), done()],
+            "remediation_finalize": [propose("rerun_dag", weather)],
             "reporter": [POSTMORTEM],
         },
         tools,
@@ -379,3 +314,38 @@ def test_remediation_cannot_call_actions_directly(tools):
     refusal = fake.asked["remediation"][1][-1].content
     assert "propose it as your action instead" in refusal
     assert state["status"] == "resolved"
+
+
+def test_remediation_skips_the_tool_turn_outside_api_outages(tools):
+    _, _, fake = run(
+        {
+            "diagnostics": [done()],
+            "diagnostics_finalize": [diagnosis("DUPLICATE_LOAD")],
+            "remediation_finalize": [propose("rerun_dag", RERUN)],
+            "reporter": [POSTMORTEM],
+        },
+        tools,
+    )
+    assert "remediation" not in fake.asked  # no LLM tool turn, straight to the decision
+    assert "check_api_health" not in names(tools)
+
+
+def test_verified_fix_reports_even_over_budget(tools, monkeypatch):
+    from agent.settings import get_settings
+
+    monkeypatch.setenv("MAX_COST_EUR_PER_INCIDENT", "0.0035")  # crossed during the run
+    get_settings.cache_clear()
+    try:
+        state, _, _ = run(
+            {
+                "diagnostics": [done()],
+                "diagnostics_finalize": [diagnosis("DUPLICATE_LOAD")],
+                "remediation_finalize": [propose("rerun_dag", RERUN)],
+                "reporter": [POSTMORTEM],
+            },
+            tools,
+        )
+    finally:
+        get_settings.cache_clear()
+    assert state["status"] == "resolved"
+    assert state["routing"][-1]["rule"] == 5

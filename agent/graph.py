@@ -89,7 +89,9 @@ def build_graph() -> StateGraph:
     b.add_node("remediation", remediation_llm, retry_policy=RETRY)
     b.add_node("remediation_tools", remediation_tools)
     b.add_node("remediation_finalize", remediation_finalize, retry_policy=RETRY)
-    b.add_node("approval_gate", approval_gate, destinations=("execute_action", "supervisor"))
+    b.add_node(
+        "approval_gate", approval_gate, destinations=("execute_action", "supervisor", "escalate")
+    )
     b.add_node("execute_action", execute_action)
     b.add_node("escalate", escalate)
     b.add_node("reporter", reporter_agent, retry_policy=RETRY)

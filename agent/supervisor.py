@@ -71,6 +71,9 @@ def _ask_llm(state: IncidentState) -> tuple[Next, str, dict]:
 
 
 def supervisor(state: IncidentState) -> Command[Next]:
+    # 5 first: a verified fix is done whatever the budgets say; reporting it is cheap.
+    if state.get("last_event") == "verified":
+        return _route(state, "reporter", 5, "rerun verified green", "code")
     # 1. budgets and loops
     stop = budget.over_budget(state) or budget.loop_detected(state)
     if stop:
@@ -111,9 +114,6 @@ def supervisor(state: IncidentState) -> Command[Next]:
         )
 
     last = state.get("last_event")
-    # 5. the last action was a rerun and the whole chain is green
-    if last == "verified":
-        return _route(state, "reporter", 5, "rerun verified green", "code")
     # 6. something went wrong after a proposal: the only case the LLM decides
     if last in ("rejected", "action_failed", "verify_failed"):
         goto, reason, cost = _ask_llm(state)

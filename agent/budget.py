@@ -22,7 +22,12 @@ def over_budget(state: Mapping[str, Any]) -> str | None:
 
 
 def loop_detected(state: Mapping[str, Any]) -> str | None:
-    counts = Counter((t["tool"], t["args_hash"]) for t in state.get("tool_log", []))
+    """Repeating a call that keeps failing is a loop. Repeated successful reads are not (the
+    step and cost budgets bound those), and repeated actions are capped by the tier-1 limit
+    and idempotency."""
+    counts = Counter(
+        (t["tool"], t["args_hash"]) for t in state.get("tool_log", []) if not t.get("ok")
+    )
     for (tool, _), n in counts.items():
         if n >= LOOP_REPEATS:
             return f"loop: {tool} called {n} times with the same arguments"

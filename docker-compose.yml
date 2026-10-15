@@ -127,7 +127,7 @@ services:
 
   worker:
     <<: *app
-    command: celery -A worker.celery_app:celery_app worker --concurrency=1 --pool=solo --loglevel=INFO
+    command: celery -A worker.celery_app:celery_app worker -B --schedule /tmp/celerybeat-schedule --concurrency=1 --pool=solo --loglevel=INFO
     environment:
       FASTEMBED_CACHE_PATH: /opt/models
     volumes:
