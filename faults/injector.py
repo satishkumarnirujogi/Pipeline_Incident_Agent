@@ -71,17 +71,6 @@ def _agent_db() -> psycopg.Connection:
     conn = psycopg.connect(
         get_settings().dsn("agent_app", "agent", from_host=True), autocommit=True
     )
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS eval.injections (
-               id           bigserial PRIMARY KEY,
-               scenario_id  text NOT NULL,
-               eval_run_id  text,
-               action       text NOT NULL CHECK (action IN ('apply', 'revert')),
-               mechanism    text NOT NULL,
-               details      jsonb NOT NULL DEFAULT '{}',
-               at           timestamptz NOT NULL DEFAULT now()
-           )"""
-    )
     return conn
 
 

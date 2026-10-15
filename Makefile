@@ -48,7 +48,7 @@ verify-faults: ## apply + revert one dev variant per fault type
 	uv run python -m faults.verify --one-per-fault
 
 eval:          ## Phase 9
-	uv run python -m eval.run_eval --split $(or $(SPLIT),dev)
+	uv run python -m eval.run_eval --split $(or $(SPLIT),dev) $(if $(CHAOS),--chaos,) $(if $(RESUME),--resume $(RESUME),)
 
 test:
 	uv run pytest tests/unit tests/integration
