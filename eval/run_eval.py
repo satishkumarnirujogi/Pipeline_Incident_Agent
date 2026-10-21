@@ -5,6 +5,7 @@
     uv run python -m eval.run_eval --scenarios F01-v1 F05-v2
     uv run python -m eval.run_eval --resume dev-20261015T1200   # continue an interrupted run
     uv run python -m eval.run_eval --split dev --chaos    # worker must run with CHAOS_MODE=on
+    uv run python -m eval.run_eval --split test --ablation no_memory   # worker ABLATION too
 
 Per scenario (one at a time: parallel runs would share one warehouse):
  1. revert to a clean state and verify it (the month's DAG chain green)
@@ -31,6 +32,7 @@ from datetime import UTC, datetime
 import httpx
 import psycopg
 
+from agent.ablation import ABLATIONS
 from agent.chaos import scenario_flag
 from agent.settings import get_settings
 from eval import observe, report
@@ -52,13 +54,17 @@ def _agent() -> psycopg.Connection:
     return psycopg.connect(get_settings().dsn("agent_app", "agent"), autocommit=True)
 
 
-def worker_chaos() -> str:
+def worker_env(name: str, default: str) -> str:
     return (
         subprocess.run(
-            ["docker", "exec", WORKER, "printenv", "CHAOS_MODE"], capture_output=True, text=True
+            ["docker", "exec", WORKER, "printenv", name], capture_output=True, text=True
         ).stdout.strip()
-        or "off"
+        or default
     )
+
+
+def worker_chaos() -> str:
+    return worker_env("CHAOS_MODE", "off")
 
 
 def git_sha() -> str:
@@ -214,6 +220,12 @@ def main() -> int:
     parser.add_argument("--one-per-fault", action="store_true")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--chaos", action="store_true", help="expect the worker in chaos mode")
+    parser.add_argument(
+        "--ablation", choices=ABLATIONS, default="full", help="expect the worker in this config"
+    )
+    parser.add_argument(
+        "--baseline", help="for a chaos run: the run without chaos, for the recovery rate"
+    )
     parser.add_argument("--resume", help="continue an eval run, skipping finished scenarios")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -228,11 +240,20 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
+    ablation = worker_env("ABLATION", "full")
+    if args.ablation != ablation:
+        print(
+            f"worker ABLATION is {ablation!r} but --ablation is {args.ablation!r}; recreate it "
+            f"with make worker ABLATION={args.ablation}",
+            file=sys.stderr,
+        )
+        return 2
 
     scenarios = select(args)
     s = get_settings()
     eval_run_id = args.resume or (
-        f"{args.split}{'-chaos' if args.chaos else ''}-{datetime.now(UTC):%Y%m%dT%H%M}"
+        f"{args.split}{'' if args.ablation == 'full' else '-' + args.ablation}"
+        f"{'-chaos' if args.chaos else ''}-{datetime.now(UTC):%Y%m%dT%H%M}"
     )
     with _agent() as conn:
         done = {
@@ -252,6 +273,7 @@ def main() -> int:
                         "primary_model": s.primary_model,
                         "fallback_model": s.fallback_model,
                         "chaos": args.chaos,
+                        "ablation": args.ablation,
                         "git": git_sha(),
                         "scenarios": [sc.id for sc in scenarios],
                     }
@@ -277,7 +299,7 @@ def main() -> int:
 
     with _agent() as conn:
         conn.execute("UPDATE eval.runs SET finished_at=now() WHERE id=%s", (eval_run_id,))
-    path = report.write(eval_run_id)
+    path = report.write(eval_run_id, args.baseline)
     print(f"report: {path}")
     return 0
 

@@ -133,6 +133,8 @@ services:
       # evaluation only: CHAOS_MODE=on [CHAOS_CONFIG=eval/chaos_demo.yaml] docker compose up -d worker
       CHAOS_MODE: ${CHAOS_MODE:-off}
       CHAOS_CONFIG: ${CHAOS_CONFIG:-}
+      # evaluation only: full | single_agent | no_recovery | no_memory (make worker ABLATION=...)
+      ABLATION: ${ABLATION:-full}
     volumes:
       # tier-0 tools read landing files and contracts; agents never write files
       - ./data:/app/data:ro

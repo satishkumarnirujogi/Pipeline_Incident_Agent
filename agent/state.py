@@ -99,6 +99,8 @@ class IncidentState(TypedDict, total=False):
 
     remed_messages: Annotated[list, add_messages]
     remed_tool_calls: int
+    single_messages: Annotated[list, add_messages]  # ablation A only (agent/single.py)
+    single_tool_calls: int
     proposed_action: dict | None
     proposals: int  # also the idempotency step of the next action
     approval_id: str | None

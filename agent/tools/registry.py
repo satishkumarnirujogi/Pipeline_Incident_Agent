@@ -37,7 +37,7 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
-from agent import chaos, tracing
+from agent import ablation, chaos, tracing
 from agent.tools.errors import (
     ApprovalRequired,
     ErrorType,
@@ -292,7 +292,7 @@ def _execute(
             )
             started = True
 
-        retry_safe = spec.tier == TIER_READONLY or spec.idempotent
+        retry_safe = (spec.tier == TIER_READONLY or spec.idempotent) and ablation.recovery_on()
 
         def before_sleep(state: RetryCallState) -> None:
             exc = state.outcome.exception() if state.outcome else None

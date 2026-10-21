@@ -21,6 +21,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import RetryPolicy
 
+from agent import ablation
 from agent.agents.diagnostics import (
     after_diagnostics_llm,
     after_diagnostics_tools,
@@ -75,26 +76,32 @@ def intake(state: IncidentState) -> dict:
 
 
 def build_graph() -> StateGraph:
+    # The no_recovery ablation runs without node retry policies.
+    retry = RETRY if ablation.recovery_on() else None
+    if ablation.single_agent():
+        from agent.single import build_single_agent_graph
+
+        return build_single_agent_graph(intake, retry)
     b = StateGraph(IncidentState)
     b.add_node("intake", intake)
     b.add_node(
         "supervisor",
         supervisor,
-        retry_policy=RETRY,
+        retry_policy=retry,
         destinations=("diagnostics", "remediation", "escalate", "reporter"),
     )
-    b.add_node("diagnostics", diagnostics_llm, retry_policy=RETRY)
+    b.add_node("diagnostics", diagnostics_llm, retry_policy=retry)
     b.add_node("diagnostics_tools", diagnostics_tools)
-    b.add_node("diagnostics_finalize", diagnostics_finalize, retry_policy=RETRY)
-    b.add_node("remediation", remediation_llm, retry_policy=RETRY)
+    b.add_node("diagnostics_finalize", diagnostics_finalize, retry_policy=retry)
+    b.add_node("remediation", remediation_llm, retry_policy=retry)
     b.add_node("remediation_tools", remediation_tools)
-    b.add_node("remediation_finalize", remediation_finalize, retry_policy=RETRY)
+    b.add_node("remediation_finalize", remediation_finalize, retry_policy=retry)
     b.add_node(
         "approval_gate", approval_gate, destinations=("execute_action", "supervisor", "escalate")
     )
     b.add_node("execute_action", execute_action)
     b.add_node("escalate", escalate)
-    b.add_node("reporter", reporter_agent, retry_policy=RETRY)
+    b.add_node("reporter", reporter_agent, retry_policy=retry)
 
     b.add_edge(START, "intake")
     b.add_edge("intake", "supervisor")

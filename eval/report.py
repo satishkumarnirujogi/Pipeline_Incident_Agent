@@ -117,7 +117,8 @@ def write(eval_run_id: str, baseline_run_id: str | None = None) -> Path:
         f"{meta['started_at']:%Y-%m-%d %H:%M} UTC · models "
         f"`{meta['config'].get('primary_model')}` (fallback "
         f"`{meta['config'].get('fallback_model')}`) · chaos "
-        f"{'on' if meta['config'].get('chaos') else 'off'} · git `{meta['config'].get('git')}`",
+        f"{'on' if meta['config'].get('chaos') else 'off'} · config "
+        f"`{meta['config'].get('ablation', 'full')}` · git `{meta['config'].get('git')}`",
         "",
         "## Headline metrics",
         "",

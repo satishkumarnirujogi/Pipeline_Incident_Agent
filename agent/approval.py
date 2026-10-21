@@ -13,6 +13,7 @@ from typing import Literal
 from langgraph.types import Command, interrupt
 from pydantic import ValidationError
 
+from agent import ablation
 from agent.agents import common
 from agent.state import IncidentState, ProposedAction, RootCause
 from agent.tools.registry import REGISTRY, TIER_CHANGES_DATA, validate_args
@@ -20,9 +21,14 @@ from agent.tools.registry import REGISTRY, TIER_CHANGES_DATA, validate_args
 VERIFY_TIMEOUT_S = 600
 
 
+def _back() -> Literal["supervisor", "single_agent"]:
+    """After a rejection: the Supervisor decides, or the single agent in ablation A."""
+    return "single_agent" if ablation.single_agent() else "supervisor"
+
+
 def approval_gate(
     state: IncidentState,
-) -> Command[Literal["execute_action", "supervisor", "escalate"]]:
+) -> Command[Literal["execute_action", "supervisor", "single_agent", "escalate"]]:
     action = ProposedAction.model_validate(state["proposed_action"])
     spec = REGISTRY.get(action.tool)
     if spec is None or spec.tier < TIER_CHANGES_DATA:
@@ -73,7 +79,7 @@ def approval_gate(
             except ValidationError as exc:
                 comment = f"edited arguments invalid: {exc.errors()[0]['msg']}"
                 return Command(
-                    goto="supervisor",
+                    goto=_back(),
                     update={
                         "rejections": [comment],
                         "last_event": "rejected",
@@ -87,7 +93,7 @@ def approval_gate(
             ).model_dump(mode="json")
         return Command(goto="execute_action", update=update)
     return Command(
-        goto="supervisor",
+        goto=_back(),
         update={
             "rejections": [decision.get("comment") or "rejected"],
             "last_event": "rejected",

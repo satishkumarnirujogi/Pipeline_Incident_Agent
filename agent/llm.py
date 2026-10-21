@@ -25,7 +25,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.config import get_config
 from pydantic import BaseModel, SecretStr, ValidationError
 
-from agent import chaos, telemetry
+from agent import ablation, chaos, telemetry
 from agent.settings import get_settings
 
 log = logging.getLogger(__name__)
@@ -118,7 +118,7 @@ def _chat_model(model: str, temperature: float = 0.0) -> BaseChatModel:
         base_url=s.openrouter_base_url,
         temperature=temperature,
         timeout=30,
-        max_retries=2,
+        max_retries=2 if ablation.recovery_on() else 0,
         max_completion_tokens=MAX_OUTPUT_TOKENS,
         default_headers={"X-Title": "pipeline-incident-agent"},
     )
@@ -175,13 +175,17 @@ class LLM:
         )
         return self._record(node, name, None, fallback, error, "(chaos)" in str(exc), started)
 
+    def _models(self) -> list[tuple[BaseChatModel, str, bool]]:
+        """Primary, then the fallback; without recovery (ablation) the primary only."""
+        models = [(self.primary, self.primary_name, False)]
+        if ablation.recovery_on():
+            models.append((self.fallback, self.fallback_name, True))
+        return models
+
     def with_tools(self, node: str, messages: list[BaseMessage], tools: list[dict]) -> LLMResult:
         """One tool-calling turn. Falls back to the other provider on any error."""
         result = LLMResult()
-        for model, name, fallback in (
-            (self.primary, self.primary_name, False),
-            (self.fallback, self.fallback_name, True),
-        ):
+        for model, name, fallback in self._models():
             started = time.monotonic()
             try:
                 if not fallback:
@@ -200,12 +204,9 @@ class LLM:
         """Structured output. Invalid JSON is re-asked once with the validation error, then
         the fallback model gets the same two chances."""
         result = LLMResult()
-        for model, name, fallback in (
-            (self.primary, self.primary_name, False),
-            (self.fallback, self.fallback_name, True),
-        ):
+        for model, name, fallback in self._models():
             attempt_msgs = list(messages)
-            for _repair in range(2):
+            for _repair in range(2 if ablation.recovery_on() else 1):
                 started = time.monotonic()
                 try:
                     if not fallback:

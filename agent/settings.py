@@ -7,6 +7,7 @@ the published ports on localhost.
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -55,6 +56,8 @@ class Settings(BaseSettings):
     max_steps: int = 25
     max_cost_eur_per_incident: float = 0.20
     chaos_mode: str = "off"
+    # evaluation ablations (agent/ablation.py); "full" outside evaluation
+    ablation: Literal["full", "single_agent", "no_recovery", "no_memory"] = "full"
     env: str = "dev"
 
     def dsn(self, role: str, database: str, from_host: bool | None = None) -> str:

@@ -24,7 +24,7 @@ from pydantic import ValidationError
 from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session
 
-from agent import chaos, telemetry, tracing
+from agent import ablation, chaos, telemetry, tracing
 from agent.db import agent_engine
 from agent.graph import compile_graph, run_config
 from agent.models import Approval, Escalation, Incident
@@ -202,7 +202,8 @@ def run_incident(incident_id: str) -> str:
             return snapshot.values.get("status", "unknown")  # already finished
 
         attempt = _count_attempt(incident_id)
-        if attempt > MAX_RUN_ATTEMPTS:
+        # Without recovery (ablation) a run a dead worker left behind is not resumed.
+        if attempt > (MAX_RUN_ATTEMPTS if ablation.recovery_on() else 1):
             log.error(
                 json.dumps(
                     {"event": "gave_up", "incident_id": incident_id, "attempts": attempt - 1}
