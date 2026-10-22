@@ -68,7 +68,9 @@ def _mean_and_worst(rows: list[dict]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for key in rows[0]:
         values = [float(r[key]) for r in rows if r[key] is not None]
-        if not values:
+        if key == "scenarios":  # the same scenario set in every run: not a metric
+            out[key] = rows[0][key]
+        elif not values:
             out[key] = None
         elif len(rows) == 1:
             out[key] = rows[0][key]
@@ -77,7 +79,8 @@ def _mean_and_worst(rows: list[dict]) -> dict[str, Any]:
     return out
 
 
-def build(run_ids: list[str]) -> str:
+def rows(run_ids: list[str]) -> tuple[list[dict], str | None]:
+    """One row per configuration, in the guide's A-D order, and the baseline run used."""
     configs = {r: _config(r) for r in run_ids}
     baseline = next((r for r in run_ids if configs[r] == ("full", False)), None)
     groups: dict[str, list[dict]] = {}
@@ -85,10 +88,15 @@ def build(run_ids: list[str]) -> str:
         label = LABELS.get(configs[r], f"{configs[r][0]}{', chaos on' if configs[r][1] else ''}")
         chaos = configs[r][1]
         groups.setdefault(label, []).append(metrics(r, baseline if chaos else None))
-    rows = [
+    out = [
         {"config": label, "runs": len(groups[label]), **_mean_and_worst(groups[label])}
         for label in sorted(groups, key=lambda x: ORDER.index(x) if x in ORDER else 99)
     ]
+    return out, baseline
+
+
+def build(run_ids: list[str]) -> str:
+    table, baseline = rows(run_ids)
     lines = [
         "# Ablations",
         "",
@@ -98,7 +106,7 @@ def build(run_ids: list[str]) -> str:
         "still solved under chaos / scenarios the full system solves without chaos"
         + (f" (`{baseline}`)." if baseline else "; needs a full-system run without chaos."),
         "",
-        _table(rows),
+        _table(table),
     ]
     return "\n".join(lines)
 

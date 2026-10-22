@@ -115,6 +115,10 @@ services:
     <<: *app
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000
     ports: ["8000:8000"]
+    volumes:
+      # only for the dev-only demo endpoints (ENV=dev), which write landing files to inject
+      # a fault; drop this mount and set ENV to anything else outside a local demo
+      - ./data:/app/data
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}

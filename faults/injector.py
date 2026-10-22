@@ -5,8 +5,8 @@
     python -m faults.injector release 2026-07      # clean landing + weather cache for a month
     python -m faults.injector reset                # revert everything (make reset-data)
 
-Runs on the host: Postgres on localhost:POSTGRES_HOST_PORT, the proxy on
-localhost:WEATHER_PROXY_HOST_PORT, Airflow on localhost:8080. Every apply and
+Runs on the host (Postgres, the proxy and Airflow on their published ports) or, for the
+API's dev-only demo endpoint, inside a container (by compose name). Every apply and
 revert first releases the scenario's month, then writes a row to eval.injections.
 """
 
@@ -68,9 +68,7 @@ def release(month: str) -> None:
 
 
 def _agent_db() -> psycopg.Connection:
-    conn = psycopg.connect(
-        get_settings().dsn("agent_app", "agent", from_host=True), autocommit=True
-    )
+    conn = psycopg.connect(get_settings().dsn("agent_app", "agent"), autocommit=True)
     return conn
 
 
@@ -181,18 +179,17 @@ _TRIP_COLS = (
 
 
 def _warehouse() -> psycopg.Connection:
-    return psycopg.connect(
-        get_settings().dsn("pipeline", "warehouse", from_host=True), autocommit=True
-    )
+    return psycopg.connect(get_settings().dsn("pipeline", "warehouse"), autocommit=True)
 
 
 def _apply_sql(sc: Scenario) -> dict:
     # Looks like a second load of the same rows: a normal Airflow manual run id.
     run_id = f"manual__{datetime.now(UTC).isoformat()}"
     with _warehouse() as conn:
-        loaded = conn.execute(
+        row = conn.execute(
             "SELECT count(*) FROM raw.yellow_trips WHERE pickup_month = %s", (sc.month,)
-        ).fetchone()[0]
+        ).fetchone()
+        loaded = row[0] if row else 0
         if loaded == 0:
             raise InjectionError(f"raw.yellow_trips has no rows for {sc.month}; load it first")
         inserted = conn.execute(
@@ -239,7 +236,7 @@ def clear_agent_changes(month: str | None = None) -> dict:
 def _proxy(body: dict) -> dict:
     s = get_settings()
     r = httpx.post(
-        f"http://localhost:{s.weather_proxy_host_port}/_control",
+        f"{s.proxy_url}/_control",
         json=body,
         headers={"X-Control-Token": s.weather_proxy_control_token},
         timeout=10,

@@ -274,6 +274,7 @@ def main() -> int:
                         "fallback_model": s.fallback_model,
                         "chaos": args.chaos,
                         "ablation": args.ablation,
+                        "baseline": args.baseline,
                         "git": git_sha(),
                         "scenarios": [sc.id for sc in scenarios],
                     }

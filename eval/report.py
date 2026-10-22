@@ -47,14 +47,7 @@ def run(name: str, params: dict[str, Any]) -> list[dict]:
 
 
 def _trace_url(incident_id: str | None) -> str | None:
-    if not incident_id or not tracing.enabled():
-        return None
-    try:
-        project = tracing.client().api.projects.get().data[0].id
-        host = get_settings().langfuse_host.rstrip("/")
-        return f"{host}/project/{project}/traces/{tracing.trace_id_for(incident_id)}"
-    except Exception:  # noqa: BLE001
-        return None
+    return tracing.trace_url(incident_id)
 
 
 def _table(rows: list[dict], cols: list[str] | None = None) -> str:
@@ -73,6 +66,8 @@ def write(eval_run_id: str, baseline_run_id: str | None = None) -> Path:
     p = {"eval_run_id": eval_run_id, "baseline_run_id": baseline_run_id}
     with psycopg.connect(get_settings().dsn("agent_app", "agent"), row_factory=dict_row) as conn:
         meta = conn.execute("SELECT * FROM eval.runs WHERE id=%s", (eval_run_id,)).fetchone()
+    if meta is None:
+        raise LookupError(f"eval run {eval_run_id} not found")
     head = run("headline", p)[0]
     tools = run("tool_call_success", p)[0]
     esc = run("escalation", p)[0]

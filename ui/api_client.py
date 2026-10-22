@@ -16,7 +16,7 @@ class ApiError(Exception):
 
 def _call(method: str, path: str, **kw: Any) -> Any:
     try:
-        r = httpx.request(method, f"{API_URL}{path}", timeout=10, **kw)
+        r = httpx.request(method, f"{API_URL}{path}", timeout=30, **kw)
     except httpx.HTTPError as exc:
         raise ApiError(f"API unreachable: {exc}") from None
     if r.status_code >= 400:
@@ -45,3 +45,33 @@ def decide(
         f"/approvals/{approval_id}/decision",
         json={"decision": decision, "args": args, "comment": comment},
     )
+
+
+def timeline(incident_id: str) -> dict:
+    return _call("GET", f"/incidents/{incident_id}/timeline")
+
+
+def metrics_latest(eval_run_id: str | None = None) -> dict:
+    return _call(
+        "GET", "/metrics/latest", params={"eval_run_id": eval_run_id} if eval_run_id else {}
+    )
+
+
+def metrics_runs() -> list[dict]:
+    return _call("GET", "/metrics/runs")
+
+
+def metrics_ablations(split: str = "test") -> dict:
+    return _call("GET", "/metrics/ablations", params={"split": split})
+
+
+def demo_scenarios() -> list[dict]:
+    return _call("GET", "/demo/scenarios")
+
+
+def demo(action: str, scenario_id: str) -> dict:
+    return _call("POST", f"/demo/{action}/{scenario_id}")
+
+
+def demo_status() -> dict:
+    return _call("GET", "/demo/status")

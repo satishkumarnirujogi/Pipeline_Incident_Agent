@@ -42,6 +42,22 @@ def trace_id_for(incident_id: str) -> str:
     return Langfuse.create_trace_id(seed=incident_id)
 
 
+@lru_cache
+def _project_id() -> str:
+    return client().api.projects.get().data[0].id
+
+
+def trace_url(incident_id: str | None) -> str | None:
+    """Link to the incident's trace in the Langfuse UI, or None without keys or a connection."""
+    if not incident_id or not enabled():
+        return None
+    try:
+        host = get_settings().langfuse_host.rstrip("/")
+        return f"{host}/project/{_project_id()}/traces/{trace_id_for(incident_id)}"
+    except Exception:  # noqa: BLE001 - a missing link must never break a page or report
+        return None
+
+
 def current_trace_context() -> Any:
     """{"trace_id", "parent_span_id"} of the job span, for spans made in other threads."""
     return _ctx["trace"]

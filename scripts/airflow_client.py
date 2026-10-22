@@ -6,7 +6,6 @@ operator scripts that run on the host.
 
 from __future__ import annotations
 
-import os
 import time
 from typing import Any
 
@@ -20,7 +19,8 @@ TERMINAL = {"success", "failed"}
 class AirflowClient:
     def __init__(self, base_url: str | None = None) -> None:
         s = get_settings()
-        self.base_url = base_url or os.environ.get("AIRFLOW_HOST_URL", "http://localhost:8080")
+        # the published port on the host, the compose name in Docker
+        self.base_url = base_url or s.airflow_url
         token = httpx.post(
             f"{self.base_url}/auth/token",
             json={"username": s.airflow_user, "password": s.airflow_password},

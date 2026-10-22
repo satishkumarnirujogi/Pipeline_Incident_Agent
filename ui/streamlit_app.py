@@ -1,4 +1,7 @@
-"""Incidents: what is happening, refreshed every 5 seconds. Pages: approval inbox."""
+"""Incidents: what is happening, refreshed every 5 seconds. Select a row for its detail.
+
+Pages: Incident detail, Approval inbox, KPIs, Demo (dev only).
+"""
 
 from __future__ import annotations
 
@@ -17,6 +20,7 @@ BADGE = {
     "escalated": "🟣 escalated",
     "failed": "🔴 failed",
 }
+DETAIL_PAGE = "pages/2_Incident_detail.py"
 
 st.title("Incidents")
 status = st.selectbox("Status", ["all", *BADGE], index=0)
@@ -36,13 +40,24 @@ def incident_table() -> None:
         st.info("No incidents yet.")
         return
     df = pd.DataFrame(rows)
+    df["received_at"] = pd.to_datetime(df["received_at"]).dt.strftime("%Y-%m-%d %H:%M:%S")
     df["status"] = df["status"].map(lambda s: BADGE.get(s, s))
     df["mttr_min"] = (df["mttr_s"] / 60).round(1)
-    st.dataframe(
-        df[["received_at", "status", "dag_id", "task_id", "month", "root_cause", "mttr_min", "id"]],
+    df["cost_eur"] = df["cost_eur"].round(4)
+    cols = ["received_at", "status", "dag_id", "task_id", "month", "root_cause"]
+    picked = st.dataframe(
+        df[[*cols, "mttr_min", "cost_eur", "id"]],
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
+        on_select="rerun",
+        selection_mode="single-row",
+        key="incidents",
     )
+    st.caption("Select a row to open the incident.")
+    selected = picked.selection.rows if picked else []
+    if selected:
+        st.session_state["incident_id"] = df.iloc[selected[0]]["id"]
+        st.switch_page(DETAIL_PAGE)
 
 
 incident_table()
