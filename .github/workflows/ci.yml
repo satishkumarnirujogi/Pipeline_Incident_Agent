@@ -1,0 +1,43 @@
+# Every push and pull request: lint, types, unit and integration tests.
+# No API keys and no cost: models are scripted fakes, Postgres comes from testcontainers
+# (GitHub's Ubuntu runners have Docker). Real-model runs belong to the eval harness.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.12"
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy agent api worker
+
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.12"
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Unit and integration tests
+        run: uv run pytest tests/unit tests/integration -q --durations=10
