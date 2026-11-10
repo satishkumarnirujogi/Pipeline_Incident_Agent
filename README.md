@@ -2,8 +2,7 @@
 
 A LangGraph multi-agent system that diagnoses and repairs failures in an Airflow + dbt + Postgres pipeline: it finds the root cause, proposes one fix at a time, asks a human before any data change, verifies the repair end to end and writes the postmortem. It's measured against 69 injected incidents with known ground truth.
 
-<!-- CI badge: add once the repository is on GitHub, e.g.
-[![CI](https://github.com/<owner>/<repo>/actions/workflows/ci.yml/badge.svg)](https://github.com/<owner>/<repo>/actions/workflows/ci.yml) -->
+[![CI](https://github.com/satishkumarnirujogi/Pipeline_Incident_Agent/actions/workflows/ci.yml/badge.svg)](https://github.com/satishkumarnirujogi/Pipeline_Incident_Agent/actions/workflows/ci.yml)
 
 ## Results
 
